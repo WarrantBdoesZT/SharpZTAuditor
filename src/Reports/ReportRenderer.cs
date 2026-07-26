@@ -12,6 +12,16 @@ namespace ZeroTrustAuditor.Reports
 {
     public class ReportRenderer
     {
+        /// <summary>
+        /// UTF-8 WITHOUT a byte order mark.
+        ///
+        /// Encoding.UTF8 emits EF BB BF. A leading BOM makes the file invalid JSON per
+        /// RFC 8259 and is rejected by strict parsers -- including Splunk HEC and the
+        /// Sentinel Log Analytics ingestion API, which meant the SIEM outputs this tool
+        /// advertised could not actually be ingested.
+        /// </summary>
+        internal static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
+
         private static readonly JsonSerializerOptions JsonOpts = new()
         {
             WriteIndented = true,
@@ -22,7 +32,7 @@ namespace ZeroTrustAuditor.Reports
 
         public void WriteJson(AuditReport report, string path)
         {
-            File.WriteAllText(path, JsonSerializer.Serialize(report, JsonOpts), Encoding.UTF8);
+            File.WriteAllText(path, JsonSerializer.Serialize(report, JsonOpts), Utf8NoBom);
             Console.WriteLine($"[+] JSON: {path}");
         }
 
@@ -41,12 +51,26 @@ namespace ZeroTrustAuditor.Reports
                     Q(f.Description), Q(f.Evidence), Q(f.RemediationGuidance)));
             }
 
-            File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+            File.WriteAllText(path, sb.ToString(), Utf8NoBom);
             Console.WriteLine($"[+] CSV:  {path}");
         }
 
-        private static string Q(string s) =>
-            "\"" + s.Replace("\"", "\"\"").Replace("\n", " ") + "\"";
+        internal static string Q(string? s)
+        {
+            var v = (s ?? string.Empty)
+                .Replace("\"", "\"\"")
+                .Replace("\r", " ")     // was unhandled: a bare CR still broke the row
+                .Replace("\n", " ");
+
+            // Neutralise spreadsheet formula injection. These cells carry AD-controlled
+            // strings (principal names, share names, group names), and Excel will
+            // evaluate a leading =, +, - or @ as a formula on open.
+            if (v.Length > 0 && (v[0] == '=' || v[0] == '+' || v[0] == '-' ||
+                                 v[0] == '@' || v[0] == '\t'))
+                v = "'" + v;
+
+            return "\"" + v + "\"";
+        }
 
         // ── HTML ──────────────────────────────────────────────────────────────
 
@@ -173,7 +197,7 @@ th.sortable::after{content:' \2195';opacity:.4;font-size:9px}
             sb.Append("""
 </body></html>
 """);
-            File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+            File.WriteAllText(path, sb.ToString(), Utf8NoBom);
             Console.WriteLine($"[+] HTML: {path}");
         }
 

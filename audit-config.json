@@ -51,6 +51,8 @@
     "ntlmSafeMinimum": 5
   },
 
+  "_correlationNote": "scope=host requires both findings to touch a common host (a real attack chain). scope=domain only requires both conditions to exist somewhere in the domain and is tagged as such on the finding, because it is a weaker signal.",
+
   "correlation": {
     "enabled": true,
     "rules": [
@@ -58,6 +60,7 @@
         "name": "SMB relay + local admin spread",
         "checkA": "SMB_SIGNING_DISABLED",
         "checkB": "LOCAL_ADMIN_OVERLAP",
+        "scope": "host",
         "riskBoost": 2.0,
         "rationale": "Unsigned SMB enables NTLM relay; shared local admin means one relay = many hosts compromised."
       },
@@ -65,6 +68,7 @@
         "name": "NTLMv1 + local admin spread",
         "checkA": "NTLM_V1_ENABLED",
         "checkB": "LOCAL_ADMIN_OVERLAP",
+        "scope": "host",
         "riskBoost": 2.0,
         "rationale": "NTLMv1 hashes crack quickly; combined with admin overlap enables mass lateral movement."
       },
@@ -72,13 +76,15 @@
         "name": "Unconstrained delegation + Kerberoasting",
         "checkA": "UNCONSTRAINED_DELEGATION",
         "checkB": "KERBEROASTABLE_SPN",
+        "scope": "domain",
         "riskBoost": 2.0,
-        "rationale": "Cracking the Kerberoastable SPN yields a ticket that can be presented to the unconstrained host."
+        "rationale": "Cracking the Kerberoastable SPN yields a ticket that can be presented to the unconstrained host. Both are domain-scoped objects, so this is an AND of two domain-wide facts rather than host co-location."
       },
       {
         "name": "DCSync rights + stale account",
         "checkA": "DCSYNC_ACE",
         "checkB": "STALE_PRIVILEGED_ACCOUNT",
+        "scope": "domain",
         "riskBoost": 2.0,
         "rationale": "Stale accounts are unlikely to have MFA or active monitoring; DCSync right means instant domain takeover."
       },
@@ -86,15 +92,17 @@
         "name": "Unencrypted WinRM + local admin spread",
         "checkA": "WINRM_UNENCRYPTED",
         "checkB": "LOCAL_ADMIN_OVERLAP",
+        "scope": "host",
         "riskBoost": 2.0,
         "rationale": "Plaintext WinRM exposes credentials in transit; admin overlap multiplies blast radius."
       },
       {
-        "name": "RDP NLA disabled + open SMB share",
+        "name": "RDP NLA disabled + writable SMB share",
         "checkA": "RDP_NLA_DISABLED",
-        "checkB": "OPEN_SMB_SHARE",
+        "checkB": "OPEN_SMB_SHARE_WRITE",
+        "scope": "host",
         "riskBoost": 2.0,
-        "rationale": "Pre-auth RDP exposure combined with writable share creates both remote exec and persistence vectors."
+        "rationale": "Pre-auth RDP exposure combined with writable share creates both remote exec and persistence vectors. checkB previously read OPEN_SMB_SHARE, a name no check ever emits, so this rule could never match."
       }
     ]
   },

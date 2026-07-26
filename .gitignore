@@ -1,0 +1,32 @@
+# Build output
+bin/
+obj/
+dist/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+
+# Test / coverage
+[Tt]est[Rr]esult*/
+coverage*.xml
+*.coverage
+
+# Generated reports -- these contain live findings about a real network and must
+# never be committed.
+reports/
+*.sentinel.json
+*.splunk.json
+*.cef
+
+# Target lists frequently contain internal hostnames
+targets.txt
+
+# Editors / OS
+.vs/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+*:Zone.Identifier

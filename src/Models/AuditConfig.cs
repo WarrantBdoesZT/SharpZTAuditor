@@ -99,6 +99,23 @@ namespace ZeroTrustAuditor.Models
         public string CheckB { get; set; } = string.Empty;
         [JsonPropertyName("riskBoost")]
         public double RiskBoost { get; set; } = 2.0;
+
+        [JsonPropertyName("rationale")]
+        public string Rationale { get; set; } = string.Empty;
+
+        /// <summary>
+        /// "host"   -- both findings must touch a common host (a real attack chain).
+        /// "domain" -- both conditions merely have to exist somewhere in the domain.
+        ///
+        /// Domain scope is deliberately weaker and is tagged as such on the finding,
+        /// because it is an AND of two domain-wide facts rather than a co-location.
+        /// </summary>
+        [JsonPropertyName("scope")]
+        public string Scope { get; set; } = "host";
+
+        [JsonIgnore]
+        public bool IsHostScoped =>
+            !Scope.Equals("domain", StringComparison.OrdinalIgnoreCase);
     }
 
     public class CorrelationSettings
@@ -165,6 +182,18 @@ namespace ZeroTrustAuditor.Models
         {
             ["RDP"] = 3389, ["SMB"] = 445, ["WinRM"] = 5985,
             ["WinRMHTTPS"] = 5986, ["WMI"] = 135, ["SSH"] = 22
+        };
+
+        /// <summary>
+        /// Protocols (keys of <see cref="AdminPorts"/>) that must not cross a segment
+        /// boundary. This key existed in audit-config.json but had no property to bind
+        /// to, so it was silently discarded and SegmentationChecker used a hardcoded
+        /// list instead -- customising it in config had no effect.
+        /// </summary>
+        [JsonPropertyName("crossSegmentAdminPorts")]
+        public List<string> CrossSegmentAdminPorts { get; set; } = new()
+        {
+            "SMB", "WinRM", "WMI", "RDP"
         };
     }
 

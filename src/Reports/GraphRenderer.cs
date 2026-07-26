@@ -26,7 +26,7 @@ namespace ZeroTrustAuditor.Reports
 
         public void WriteJson(LateralMovementGraph graph, string path)
         {
-            File.WriteAllText(path, JsonSerializer.Serialize(graph, JsonOpts), Encoding.UTF8);
+            File.WriteAllText(path, JsonSerializer.Serialize(graph, JsonOpts), ReportRenderer.Utf8NoBom);
             Console.WriteLine($"[+] Graph JSON: {path}");
         }
 
@@ -60,7 +60,7 @@ namespace ZeroTrustAuditor.Reports
                 .Replace("{{GRAPH_DATA}}", dataJson)
                 .Replace("{{PATHS_HTML}}", BuildPathsHtml(graph));
 
-            File.WriteAllText(path, html, Encoding.UTF8);
+            File.WriteAllText(path, html, ReportRenderer.Utf8NoBom);
             Console.WriteLine($"[+] Graph HTML: {path}");
         }
 

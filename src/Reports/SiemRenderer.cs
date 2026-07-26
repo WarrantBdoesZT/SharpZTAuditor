@@ -60,7 +60,7 @@ namespace ZeroTrustAuditor.Reports
                 sb.AppendLine(JsonSerializer.Serialize(evt, JsonOpts));
             }
 
-            File.WriteAllText(path, sb.ToString(), Encoding.UTF8);
+            File.WriteAllText(path, sb.ToString(), ReportRenderer.Utf8NoBom);
             Console.WriteLine($"[+] Splunk HEC: {path}");
         }
 
@@ -93,7 +93,7 @@ namespace ZeroTrustAuditor.Reports
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
             });
 
-            File.WriteAllText(path, json, Encoding.UTF8);
+            File.WriteAllText(path, json, ReportRenderer.Utf8NoBom);
             Console.WriteLine($"[+] Sentinel JSON: {path}");
             Console.WriteLine($"    Log type (table): {_config.Output.Sentinel.LogType}_CL");
         }
@@ -132,7 +132,7 @@ namespace ZeroTrustAuditor.Reports
                           $"{Esc(f.CheckName)}|{Esc(desc)}|{cefSev}|{ext}");
             }
 
-            File.WriteAllLines(path, lines, Encoding.UTF8);
+            File.WriteAllLines(path, lines, ReportRenderer.Utf8NoBom);
             Console.WriteLine($"[+] CEF: {path} ({lines.Count} events)");
         }
 

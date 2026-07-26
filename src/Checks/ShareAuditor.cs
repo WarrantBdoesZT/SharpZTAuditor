@@ -88,7 +88,8 @@ namespace ZeroTrustAuditor.Checks
                             $"Share=ADMIN$; Principal={principal}; Rights={rule.FileSystemRights}",
                             "Restrict ADMIN$ access to Administrators and SYSTEM only. " +
                             "If admin shares are not required, disable via registry: " +
-                            "AutoShareServer=0 or AutoShareWks=0."));
+                            "AutoShareServer=0 or AutoShareWks=0.",
+                            subject: $"ADMIN$|{principal}"));
                     }
                 }
             }
@@ -148,7 +149,8 @@ namespace ZeroTrustAuditor.Checks
                         $"Share={shareName}; Path={uncPath}; Principal={principal}; Rights={rule.FileSystemRights}",
                         "Remove 'Everyone' and 'Authenticated Users' from share permissions. " +
                         "Grant access only to specific AD groups that require it. " +
-                        "Audit share permissions quarterly."));
+                        "Audit share permissions quarterly.",
+                        subject: $"{shareName}|{principal}"));
                 }
             }
             catch { }
@@ -186,7 +188,8 @@ namespace ZeroTrustAuditor.Checks
                         $"Path={sysvolPath}; Principal={principal}; Rights={rule.FileSystemRights}",
                         "SYSVOL should only be writable by Domain Admins, SYSTEM, and CREATOR OWNER. " +
                         "Remove any broader write permissions immediately. " +
-                        "Enable FRS/DFSR monitoring for unauthorized changes."));
+                        "Enable FRS/DFSR monitoring for unauthorized changes.",
+                        subject: principal));
                 }
             }
             catch (Exception ex)
