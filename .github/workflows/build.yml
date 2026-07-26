@@ -1,10 +1,11 @@
 name: Build ZeroTrustAuditor
 
 on:
+  # Deliberately unfiltered. Restricting to `branches: [main]` meant a pull
+  # request stacked on another branch got no CI at all -- the change was
+  # reviewed and merged having never been compiled.
   push:
-    branches: [ main ]
   pull_request:
-    branches: [ main ]
   workflow_dispatch:
 
 jobs:
