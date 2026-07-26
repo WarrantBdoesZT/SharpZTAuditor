@@ -8,11 +8,34 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  test:
+    name: Unit tests
     runs-on: windows-latest
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore test project
+        run: dotnet restore tests/ZeroTrustAuditor.Tests/ZeroTrustAuditor.Tests.csproj
+
+      - name: Run tests
+        run: >
+          dotnet test tests/ZeroTrustAuditor.Tests/ZeroTrustAuditor.Tests.csproj
+          --configuration Release
+          --logger "console;verbosity=detailed"
+
+  build:
+    name: Publish win-x64
+    runs-on: windows-latest
+    needs: test
+
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
