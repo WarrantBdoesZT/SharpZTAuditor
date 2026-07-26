@@ -485,6 +485,42 @@ Raw observations for every probe, including Filtered, are written to `reachabili
 
 Bounded concurrency and rate limiting are enforced (`maxParallelProbes` finally does something). Timeouts are retried, so one dropped SYN on a congested link is not mistaken for a firewall. Services marked `passive-only` in `services.json` — Modbus, S7, DNP3, EtherNet/IP, BACnet — are **never** actively probed unless you pass `--allow-ot-probing` *and* the target zone sets `activeProbing: true`. An unexpected TCP connect can fault a controller.
 
+## The segmentation report
+
+When a zone map is configured, the run produces `segmentation-TIMESTAMP.html` alongside the raw observations:
+
+| Section | Answers |
+|---|---|
+| **Zone reachability matrix** | Is the network actually segmented? An N×N grid, source zones on rows. Colour is the worst outcome per pair; **grey means not assessed**, which is not the same as clean. |
+| **Endpoint exposure register** | *Which servers and endpoints allow high-risk ports*, from where, sorted by severity then blast radius. Also written as `exposure-register-TIMESTAMP.csv` for ticketing. |
+| **Policy violations** | Reachable paths policy does not permit, each with the exact firewall change and the NSA/CISA guidance that covers it. |
+| **CISA ZTMM scorecard** | Networks-pillar maturity — Traditional / Initial / Advanced / Optimal — scored only from what was measured. |
+| **Enforcement evidence** | The boundaries that *do* block. An assessment that reports only failures gets ignored. |
+
+Findings are classified by comparing what was observed against what policy permits:
+
+| Observed | Policy | Status | Meaning |
+|---|---|---|---|
+| Open | deny | **Violation** | The headline finding |
+| Closed | deny | **Unenforced** | Nothing listening, nothing blocking — safe by accident |
+| Filtered | deny | **Enforced** | The control works |
+| Filtered | allow | **Drift** | An approved path is broken; an outage waiting to happen |
+| Open / Closed | allow | **Compliant** | Working as designed |
+| Unknown | any | — | Never a violation, never a pass |
+
+### NSA and CISA guidance
+
+Every violation carries the specific guidance that applies to it, selected by zone roles, trust tiers and service category rather than pasted onto everything:
+
+- **[CISA/NSA AA23-278A](https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-278a)** — Misconfiguration #4 (lack of network segmentation, including the IT/OT callout), #2 (improper user/administrator privilege separation), #3 (insufficient internal network monitoring)
+- **[NSA CSI: Advancing Zero Trust Maturity Throughout the Network and Environment Pillar](https://media.defense.gov/2024/Mar/05/2003405462/-1/-1/0/CSI-ZERO-TRUST-NETWORK-ENVIRONMENT-PILLAR.PDF)** — data flow mapping, macro-segmentation, micro-segmentation
+- **[CISA Zero Trust Maturity Model v2.0](https://www.cisa.gov/zero-trust-maturity-model)** — Networks pillar
+- **[CISA Cross-Sector Cybersecurity Performance Goals](https://www.cisa.gov/cross-sector-cybersecurity-performance-goals)** — segment by trust boundary and platform type
+- **NSA CSI: Performing Out-of-Band Network Management** — cited for exposed IPMI/iLO/iDRAC/SNMP
+- **NSA Top Ten Cybersecurity Mitigation Strategies** — Segment Networks and Deploy Application-Aware Defenses
+
+> **Coverage.** One run measures one vantage zone, so only that row of the matrix is populated. Unmeasured pairs render as *not assessed* and are excluded from the maturity score. Run from a host in each source zone for full coverage.
+
 ## Known limitations
 
 Read these before treating a clean report as evidence of good segmentation. A full analysis and the planned redesign are in [REARCHITECTURE.md](REARCHITECTURE.md).
