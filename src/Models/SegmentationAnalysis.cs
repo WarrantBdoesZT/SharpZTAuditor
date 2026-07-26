@@ -133,7 +133,15 @@ namespace ZeroTrustAuditor.Models
 
         public string VantageHost   { get; init; } = string.Empty;
         public string VantageIp     { get; init; } = string.Empty;
+
+        /// <summary>Single zone id, or "N zones" when the input was merged.</summary>
         public string VantageZoneId { get; init; } = string.Empty;
+
+        /// <summary>
+        /// Every source zone represented. More than one means merged input, and the
+        /// coverage statement in the report changes accordingly.
+        /// </summary>
+        public List<string> VantageZones { get; init; } = new();
 
         public List<SegmentationFinding> Findings  { get; init; } = new();
         public List<EndpointExposure>    Exposures { get; init; } = new();

@@ -536,6 +536,30 @@ Every violation carries the specific guidance that applies to it, selected by zo
 
 > **Coverage.** One run measures one vantage zone, so only that row of the matrix is populated. Unmeasured pairs render as *not assessed* and are excluded from the maturity score. Run from a host in each source zone for full coverage.
 
+## Multi-vantage coverage
+
+One run measures reachability **from one source zone** — one row of the matrix. To fill in the rest, run from a host in each zone and merge:
+
+```powershell
+# on a workstation in the user VLAN
+.\ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local --output .\user
+
+# on a host in the DMZ
+.\ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local --output .\dmz
+
+# combine, and render the matrix across both
+.\ZeroTrustAuditor.exe merge .\user\reachability-*.json .\dmz\reachability-*.json ^
+    --zones zones.json --policy policy.json --report
+```
+
+No agents, no deployed infrastructure, nothing needing a change window.
+
+Observations are keyed by `(source zone, target, transport, port)`, so the same host measured from two zones is **two distinct facts**, not a duplicate — reachability is a property of an ordered pair. Blast radius in the exposure register then counts every zone proven to reach an endpoint.
+
+**Conflicts are surfaced, not smoothed over.** If a path was `Open` in one capture and `Filtered` in another, the more recent measurement wins, and the disagreement is recorded in the merged file. That difference means a control changed or is unstable, which is worth knowing.
+
+**Merging does not invent coverage.** Combining four runs gives four rows, not a complete matrix. Unmeasured pairs stay `not assessed`, are excluded from the maturity score, and the coverage callout states how many source zones were actually measured. Merging several captures from the *same* zone warns that depth improved but coverage did not.
+
 ## Known limitations
 
 Read these before treating a clean report as evidence of good segmentation. A full analysis and the planned redesign are in [REARCHITECTURE.md](REARCHITECTURE.md).

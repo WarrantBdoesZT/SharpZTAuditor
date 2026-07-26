@@ -29,6 +29,14 @@ namespace ZeroTrustAuditor
         {
             PrintBanner();
 
+            // Subcommands are matched before flag parsing so `merge` never collides
+            // with the audit path's required --domain.
+            if (args.Length > 0 &&
+                args[0].Equals("merge", StringComparison.OrdinalIgnoreCase))
+            {
+                return Commands.MergeCommand.Run(args.Skip(1).ToArray());
+            }
+
             if (args.Any(a => a is "--help" or "-h" or "-?" or "/?"))
             {
                 PrintUsage();
@@ -176,7 +184,8 @@ namespace ZeroTrustAuditor
                         orchestrator.Observations,
                         orchestrator.ProbeStatistics,
                         vantageZone,
-                        Path.Combine(opts.OutputDir, $"reachability-{stamp}.json"));
+                        Path.Combine(opts.OutputDir, $"reachability-{stamp}.json"),
+                        Environment.MachineName);
 
                     if (orchestrator.ProbeStatistics != null)
                         Console.WriteLine($"[*] Probes: {orchestrator.ProbeStatistics}");
@@ -292,6 +301,9 @@ namespace ZeroTrustAuditor
                 "\nUsage:\n" +
                 "  ZeroTrustAuditor.exe --hosts h1,h2 --domain corp.local\n" +
                 "  ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local\n" +
+                "\nSubcommands:\n" +
+                "  merge <files...>  Combine reachability captures from several vantage\n" +
+                "                    zones into one matrix. See: ZeroTrustAuditor merge\n" +
                 "\nOptional flags:\n" +
                 "  --output   ./reports          Output directory (default: ./reports)\n" +
                 "  --config   audit-config.json  Config file path\n" +

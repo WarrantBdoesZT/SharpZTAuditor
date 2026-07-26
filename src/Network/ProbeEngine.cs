@@ -51,6 +51,20 @@ namespace ZeroTrustAuditor.Network
         public string    Transport      { get; init; } = "tcp";
         public string    ServiceClassId { get; init; } = string.Empty;
 
+        /// <summary>
+        /// The zone this observation was made FROM. Stamped by the caller, which
+        /// knows the zone map; the probe engine deliberately does not.
+        ///
+        /// Carried per-observation rather than per-run so that merged results from
+        /// several vantage points stay attributable. Reachability is a property of
+        /// an ordered pair, and a merged file that forgot where each measurement was
+        /// taken would be worthless.
+        /// </summary>
+        public string VantageZoneId { get; set; } = string.Empty;
+
+        /// <summary>Machine the probe ran on, for provenance in merged files.</summary>
+        public string VantageHost { get; set; } = string.Empty;
+
         public ReachabilityVerdict Verdict    { get; init; }
         public ProbeEvidence       Evidence   { get; init; } = new();
         public double              Confidence { get; init; }
