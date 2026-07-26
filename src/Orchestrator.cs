@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using ZeroTrustAuditor.Checks;
 using ZeroTrustAuditor.Config;
 using ZeroTrustAuditor.Models;
+using ZeroTrustAuditor.Network;
 
 namespace ZeroTrustAuditor
 {
@@ -15,11 +16,32 @@ namespace ZeroTrustAuditor
     {
         private readonly AuditConfig _config;
         private readonly SegmentationContext _segmentation;
+        private readonly ProbeOptions _probeOptions;
 
-        public Orchestrator(AuditConfig config, SegmentationContext? segmentation = null)
+        /// <summary>
+        /// Tri-state reachability observations from the segmentation probe, exposed
+        /// so the caller can persist them. Filtered results never become findings,
+        /// but they are the evidence that a boundary control actually works.
+        /// </summary>
+        public List<ReachabilityObservation> Observations { get; } = new();
+
+        public ProbeStatistics? ProbeStatistics { get; private set; }
+
+        public Orchestrator(
+            AuditConfig config,
+            SegmentationContext? segmentation = null,
+            ProbeOptions? probeOptions = null)
         {
             _config       = config;
             _segmentation = segmentation ?? new SegmentationContext();
+            _probeOptions = probeOptions ?? new ProbeOptions
+            {
+                TimeoutMs        = config.Network.PortProbeTimeoutMs,
+                MaxConcurrency   = config.Network.MaxParallelProbes,
+                ProbesPerSecond  = config.Network.ProbesPerSecond,
+                RetriesOnTimeout = config.Network.RetriesOnTimeout,
+                GrabBanners      = config.Network.GrabBanners,
+            };
         }
 
         public async Task<AuditReport> RunAsync(
@@ -85,8 +107,19 @@ namespace ZeroTrustAuditor
             if (!skip.Contains("SegmentationChecker") && !skip.Contains("Segmentation"))
             {
                 Console.WriteLine("[*] Launching: SegmentationChecker");
+                // Held outside the lambda so its observations and probe statistics
+                // survive the run for the reporting layer.
+                var segChecker = new SegmentationChecker(
+                    _config, scopedHosts, _segmentation, new ProbeEngine(_probeOptions));
+
                 tasks.Add(RunSafe("SegmentationChecker",
-                    () => new SegmentationChecker(_config, scopedHosts, _segmentation).RunAsync(),
+                    async () =>
+                    {
+                        var result = await segChecker.RunAsync();
+                        Observations.AddRange(segChecker.Observations);
+                        ProbeStatistics = segChecker.ProbeStatistics;
+                        return result;
+                    },
                     linked.Token));
             }
 

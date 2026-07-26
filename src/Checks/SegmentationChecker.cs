@@ -24,13 +24,32 @@ namespace ZeroTrustAuditor.Checks
     {
         private readonly string[] _hosts;
         private readonly SegmentationContext _segmentation;
+        private readonly ProbeEngine _probeEngine;
+
+        /// <summary>
+        /// Raw tri-state observations, retained so the reporting layer can show
+        /// enforcement evidence (the boundaries that DO block) rather than only
+        /// failures. An assessment that reports nothing but problems gets ignored.
+        /// </summary>
+        public List<ReachabilityObservation> Observations { get; } = new();
+
+        public ProbeStatistics ProbeStatistics => _probeEngine.Statistics;
 
         public SegmentationChecker(
-            AuditConfig config, string[] hosts, SegmentationContext? segmentation = null)
+            AuditConfig config, string[] hosts,
+            SegmentationContext? segmentation = null, ProbeEngine? probeEngine = null)
             : base(config)
         {
             _hosts        = hosts;
             _segmentation = segmentation ?? new SegmentationContext();
+            _probeEngine  = probeEngine ?? new ProbeEngine(new ProbeOptions
+            {
+                TimeoutMs        = config.Network.PortProbeTimeoutMs,
+                MaxConcurrency   = config.Network.MaxParallelProbes,
+                ProbesPerSecond  = config.Network.ProbesPerSecond,
+                RetriesOnTimeout = config.Network.RetriesOnTimeout,
+                GrabBanners      = config.Network.GrabBanners,
+            });
         }
 
         public async Task<List<Finding>> RunAsync()
@@ -76,15 +95,12 @@ namespace ZeroTrustAuditor.Checks
             var findings = new List<Finding>();
             Log($"  Probing: {host}");
 
-            var ports = Config.Network.AdminPorts;
-            var open  = await ProbePortsAsync(host, ports);
-
             // ── CHECK 1: Cross-ZONE admin port exposure ───────────────────────
             // Zone membership comes from declared CIDRs, and the vantage address is
             // the one the OS would actually route from to THIS target -- not an
             // arbitrary NIC picked by enumeration order.
             if (_segmentation.IsConfigured)
-                await CheckCrossZoneExposureAsync(host, open, ports, findings);
+                await CheckCrossZoneExposureAsync(host, findings);
 
             // ── CHECK 2: Windows Firewall state (via registry) ────────────────
             CheckFirewallState(host, findings);
@@ -100,10 +116,10 @@ namespace ZeroTrustAuditor.Checks
 
         // ── CHECK 1: Cross-zone exposure ──────────────────────────────────────
 
-        private async Task CheckCrossZoneExposureAsync(
-            string host, Dictionary<string, bool> open,
-            Dictionary<string, int> ports, List<Finding> findings)
+        private async Task CheckCrossZoneExposureAsync(string host, List<Finding> findings)
         {
+            var ports = Config.Network.AdminPorts;
+
             var targetIp = await ResolveAsync(host);
             if (targetIp == null)
             {
@@ -161,47 +177,113 @@ namespace ZeroTrustAuditor.Checks
 
             var matchedRange = _segmentation.Zones.MatchingRange(targetIp);
 
-            foreach (var proto in open.Keys.Where(k => open[k]))
+            // Build the probe plan. Only ports flagged as cross-segment-relevant.
+            var plan = new List<ProbeTarget>();
+            foreach (var kv in ports)
             {
-                if (!watched.Contains(proto)) continue;
-                if (!ports.TryGetValue(proto, out var port)) continue;
+                if (!watched.Contains(kv.Key)) continue;
 
-                // Map the probed protocol onto a catalog service class so severity
-                // reflects what the service actually is.
-                var service = _segmentation.Services.ByPort(port).FirstOrDefault()
+                var service = _segmentation.Services.ByPort(kv.Value).FirstOrDefault()
                               ?? new ServiceClassDefinition
                               {
-                                  Id       = proto,
-                                  Ports    = new List<int> { port },
+                                  Id       = kv.Key,
+                                  Ports    = new List<int> { kv.Value },
                                   Risk     = ServiceRisk.High,
                                   Category = ServiceCategories.RemoteAdmin,
                               };
 
-                var risk = ZonePairRisk.Assess(vantageZone, targetZone, service);
+                plan.Add(new ProbeTarget
+                {
+                    Host    = host,
+                    Address = targetIp,
+                    Port    = kv.Value,
+                    Service = service,
+                    ZoneAllowsActiveProbing = !targetZone.SafeMode || targetZone.ActiveProbing,
+                });
+            }
 
-                var isRdp     = proto.Equals("RDP", StringComparison.OrdinalIgnoreCase);
-                var checkName = isRdp ? "CROSS_ZONE_RDP" : "CROSS_ZONE_ADMIN_PORT";
+            if (plan.Count == 0) return;
 
-                var remediation = isRdp
-                    ? $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{port} at the boundary " +
-                      "firewall. Route RDP through a hardened jump host in the management zone " +
-                      "and gate it with Just-In-Time access."
-                    : $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{port} ({service.Id}) at " +
-                      "the boundary firewall. Administrative protocols should originate only " +
-                      "from the management zone.";
+            var observations = await _probeEngine.ProbeAsync(plan);
+            Observations.AddRange(observations);
 
-                findings.Add(MakeFinding(host,
-                    checkName, risk.Severity,
-                    $"{service.Id} (tcp/{port}) on '{host}' ({targetIp}) is reachable from zone " +
-                    $"'{vantageZone.DisplayName}' into zone '{targetZone.DisplayName}'. " +
-                    $"Scored {risk.Severity}: {risk.Rationale}.",
+            foreach (var obs in observations)
+            {
+                var target  = plan.First(p => p.Port == obs.Port);
+                var service = target.Service!;
+                var risk    = ZonePairRisk.Assess(vantageZone, targetZone, service);
+
+                var pathEvidence =
                     $"VantageZone={vantageZone.Id} ({vantageIp}); " +
                     $"TargetZone={targetZone.Id} ({targetIp}" +
                     (matchedRange != null ? $" in {matchedRange}" : "") + "); " +
-                    $"Service={service.Id}; Port=tcp/{port}; " +
-                    $"TierDelta={vantageZone.Tier - targetZone.Tier}; RiskScore={risk.RawScore}",
-                    remediation,
-                    subject: $"{vantageZone.Id}->{targetZone.Id}|{service.Id}"));
+                    $"Service={service.Id}; Port=tcp/{obs.Port}; " +
+                    $"TierDelta={vantageZone.Tier - targetZone.Tier}; " +
+                    $"Verdict={obs.Verdict}; Confidence={obs.Confidence:F2}; {obs.Evidence}";
+
+                switch (obs.Verdict)
+                {
+                    // ── Reachable across a boundary: the headline violation ────
+                    case ReachabilityVerdict.Open:
+                    {
+                        var isRdp     = service.Id.Contains("RDP", StringComparison.OrdinalIgnoreCase);
+                        var checkName = isRdp ? "CROSS_ZONE_RDP" : "CROSS_ZONE_ADMIN_PORT";
+
+                        var mismatch = obs.Evidence.ServiceConfirmation?.StartsWith("MISMATCH") == true
+                            ? " NOTE: the banner does not match the service this port implies -- " +
+                              "verify what is actually listening."
+                            : "";
+
+                        findings.Add(MakeFinding(host,
+                            checkName, risk.Severity,
+                            $"{service.Id} (tcp/{obs.Port}) on '{host}' ({targetIp}) is REACHABLE " +
+                            $"from zone '{vantageZone.DisplayName}' into zone " +
+                            $"'{targetZone.DisplayName}'. Scored {risk.Severity}: {risk.Rationale}.{mismatch}",
+                            pathEvidence,
+                            isRdp
+                                ? $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{obs.Port} at the " +
+                                  "boundary firewall. Route RDP through a hardened jump host in the " +
+                                  "management zone and gate it with Just-In-Time access."
+                                : $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{obs.Port} " +
+                                  $"({service.Id}) at the boundary firewall. Administrative protocols " +
+                                  "should originate only from the management zone.",
+                            subject: $"{vantageZone.Id}->{targetZone.Id}|{service.Id}"));
+                        break;
+                    }
+
+                    // ── Answered with RST: nothing listening, but nothing BLOCKING ──
+                    // This class of finding did not previously exist. The old boolean
+                    // probe recorded it identically to a firewalled path, so "no
+                    // findings" could mean either a working control or an empty port.
+                    case ReachabilityVerdict.Closed:
+                    {
+                        findings.Add(MakeFinding(host,
+                            "CROSS_ZONE_UNENFORCED", Severity.Medium,
+                            $"tcp/{obs.Port} ({service.Id}) on '{host}' ({targetIp}) is not " +
+                            $"filtered between zone '{vantageZone.DisplayName}' and " +
+                            $"'{targetZone.DisplayName}' -- the host answered with RST, meaning " +
+                            "packets reach it and no boundary control is blocking this protocol. " +
+                            "Nothing is listening today, so there is no exposure right now; the " +
+                            "moment this service is installed or enabled, the path is open. " +
+                            "This is the difference between being segmented and being lucky.",
+                            pathEvidence,
+                            $"Add an explicit deny for {vantageZone.Id} -> {targetZone.Id} on " +
+                            $"tcp/{obs.Port} at the boundary firewall. Segmentation should be " +
+                            "enforced by policy, not by the absence of a listener.",
+                            subject: $"{vantageZone.Id}->{targetZone.Id}|{service.Id}"));
+                        break;
+                    }
+
+                    // Filtered means the control is working. Not a finding; Phase 3
+                    // aggregates these into positive enforcement evidence.
+                    case ReachabilityVerdict.Filtered:
+                        break;
+
+                    case ReachabilityVerdict.Unknown:
+                        if (obs.Evidence.Method == "not-probed") break;   // safe-mode skip
+                        Log($"  {host}:{obs.Port} undetermined ({obs.Evidence.Response})");
+                        break;
+                }
             }
         }
 

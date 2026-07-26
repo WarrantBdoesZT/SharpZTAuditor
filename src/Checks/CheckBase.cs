@@ -84,8 +84,19 @@ namespace ZeroTrustAuditor.Checks
         // ── Port probe ────────────────────────────────────────────────────────
 
         /// <summary>
-        /// TCP SYN check -- non-blocking, respects timeout.
-        /// Returns true if the port accepts a connection.
+        /// LEGACY boolean port check. Returns true if the port accepts a connection.
+        ///
+        /// Do NOT use this for segmentation analysis -- it cannot distinguish a
+        /// refused connection (nothing filtering) from a dropped one (a control
+        /// enforcing), which is the entire question segmentation asks. Use
+        /// <see cref="ZeroTrustAuditor.Network.ProbeEngine"/> instead.
+        ///
+        /// It remains here for the enrichment checks, which only need to know
+        /// whether it is worth attempting a registry read against a host. That
+        /// decision genuinely is boolean.
+        ///
+        /// Known gap: this path is still unbounded and unpaced. Only ProtocolProbe
+        /// uses it, over a fixed handful of ports per host.
         /// </summary>
         protected async Task<bool> IsPortOpenAsync(string host, int port)
         {

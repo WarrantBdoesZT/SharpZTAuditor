@@ -461,6 +461,30 @@ copy policy.example.json policy.json    # declare approved cross-zone flows
 
 Configuration errors (invalid CIDR, duplicate zone id, a policy rule naming a zone that does not exist) **stop the run** rather than being skipped, because a typo in a policy rule silently turns an approved path into a reported violation.
 
+## Reachability verdicts
+
+Every segmentation probe records **why** it got the answer it did:
+
+| Verdict | Wire behaviour | What it means |
+|---|---|---|
+| **Open** | SYN/ACK | A service is listening and the path is open. |
+| **Closed** | RST | The host *answered*. Packets reach it and **nothing is filtering** — there simply is no listener today. Reported as `CROSS_ZONE_UNENFORCED`. |
+| **Filtered** | dropped / ICMP prohibited | A boundary control **is** enforcing. Not a finding — this is the evidence your segmentation works. |
+| **Unknown** | DNS failure, local egress block, not probed | Nothing can be concluded. Never counted as a pass. |
+
+The **Closed** row is the one that did not previously exist. The old boolean probe recorded a refused connection identically to a firewalled one, so "no findings" could mean either a working control or an empty port. `CROSS_ZONE_UNENFORCED` is the difference between being segmented and being lucky: nothing is exposed today, but nothing is stopping it either — the moment that service is installed, the path is open.
+
+Raw observations for every probe, including Filtered, are written to `reachability-TIMESTAMP.json`.
+
+### Probe safety
+
+```powershell
+.\ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local --dry-run
+.\ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local --rate 50 --max-concurrency 64
+```
+
+Bounded concurrency and rate limiting are enforced (`maxParallelProbes` finally does something). Timeouts are retried, so one dropped SYN on a congested link is not mistaken for a firewall. Services marked `passive-only` in `services.json` — Modbus, S7, DNP3, EtherNet/IP, BACnet — are **never** actively probed unless you pass `--allow-ot-probing` *and* the target zone sets `activeProbing: true`. An unexpected TCP connect can fault a controller.
+
 ## Known limitations
 
 Read these before treating a clean report as evidence of good segmentation. A full analysis and the planned redesign are in [REARCHITECTURE.md](REARCHITECTURE.md).
@@ -468,9 +492,9 @@ Read these before treating a clean report as evidence of good segmentation. A fu
 | Limitation | What it means for your results |
 |---|---|
 | **One vantage point** | Every probe originates from the machine running the exe. A result describes reachability *from that one segment* only — it is not a network-wide property, even though findings are presented per target host. |
-| **Closed and filtered are indistinguishable** | A TCP connect that fails is recorded the same way whether the firewall dropped it or the host is powered off. A "no findings" result therefore cannot distinguish a working control from a dead host. |
+
 | **No expected-policy baseline** | Every reachable admin port across a boundary is reported, including approved management paths. There is no allow-list, so triage is manual on every run. |
-| **Probing is unthrottled** | `maxParallelProbes` is not enforced. Large host lists can exhaust ephemeral ports, and the resulting timeouts are recorded as *closed* — i.e. the tool becomes more optimistic the harder you push it. Keep runs small until this is fixed. |
+| **The enrichment path is still unthrottled** | Segmentation probing is now bounded and paced, but `ProtocolProbe`'s legacy boolean port check is not. It runs a fixed handful of ports per host, so the blast radius is small, but it is not rate limited. |
 | **Not an assumed-breach tool** | It requires a domain-joined workstation, a valid domain user, and the Remote Registry service on targets. That is a credentialed configuration audit, not an unauthenticated foothold simulation. |
 
 ## Legal notice
