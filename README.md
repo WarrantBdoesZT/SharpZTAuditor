@@ -508,6 +508,21 @@ Findings are classified by comparing what was observed against what policy permi
 | Open / Closed | allow | **Compliant** | Working as designed |
 | Unknown | any | — | Never a violation, never a pass |
 
+### Host context escalates reachable paths
+
+The AD, protocol and share checks are now an **enrichment tier** rather than five co-equal modules. Their findings are still reported in their own right, but they also attach to the specific reachable path they make worse:
+
+> `SMB (tcp/445)` on `10.20.0.5` is reachable from `user-vlan` into `server-tier1`.
+> **Why this path is worse than it looks**
+> - SMB signing is not required on this host, so a reachable 445 is a viable NTLM relay target.
+> - LAPS is not deployed, so this host very likely shares its local Administrator password with every machine from the same image.
+
+A reachable 445 is bad. A reachable 445 with unsigned SMB on a host whose local admin password is shared across twenty machines is a different finding, and the report now says so.
+
+Escalation happens **once** per path however many weaknesses stack, so a pile of medium issues cannot outrank a genuine critical. Only `Open` paths are escalated — a weakness sitting behind a working boundary is a finding in its own right, not an amplifier of a path that does not exist.
+
+This is the correlation the tool originally advertised. The old engine grouped by a host key that host-scoped and domain-scoped checks never shared, so four of its six rules could never fire and the two that could were vacuous.
+
 ### NSA and CISA guidance
 
 Every violation carries the specific guidance that applies to it, selected by zone roles, trust tiers and service category rather than pasted onto everything:

@@ -133,6 +133,22 @@ namespace ZeroTrustAuditor.Models
         public Severity Severity  { get; set; } = Severity.Informational;
         public double   RiskScore { get; set; }
 
+        /// <summary>
+        /// Host-level configuration facts that make this specific reachable path
+        /// worse -- unsigned SMB on a reachable 445, no LAPS on a reachable RDP,
+        /// and so on.
+        ///
+        /// This is the correlation the original tool advertised but could never
+        /// perform: it grouped by a host key that host-scoped and domain-scoped
+        /// checks never shared. Keying on the endpoint makes it work, and makes it
+        /// mean something -- reachability plus a weakness on the thing you can
+        /// reach is a different finding from either alone.
+        /// </summary>
+        public List<string> EnrichmentNotes { get; set; } = new();
+
+        /// <summary>Legacy finding IDs that contributed to <see cref="EnrichmentNotes"/>.</summary>
+        public List<string> RelatedFindingIds { get; set; } = new();
+
         // ── How to fix it ─────────────────────────────────────────────────────
         public List<GuidanceRef> Guidance    { get; set; } = new();
         public string            Remediation { get; set; } = string.Empty;
