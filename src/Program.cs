@@ -189,6 +189,17 @@ namespace ZeroTrustAuditor
                             Environment.MachineName,
                             vantageIp);
 
+                        // Fold the AD / protocol / share findings in as context on the
+                        // reachable paths they make worse. They remain reported in
+                        // their own right; this adds the relationship between them.
+                        var enriched = Analysis.EnrichmentCorrelator.Apply(
+                            analysis, report.Findings);
+
+                        if (enriched > 0)
+                            Console.WriteLine(
+                                $"[*] Enrichment: {enriched} reachable path(s) escalated by " +
+                                "host configuration weaknesses.");
+
                         var segRenderer = new SegmentationReportRenderer();
                         segRenderer.WriteHtml(analysis,
                             Path.Combine(opts.OutputDir, $"segmentation-{stamp}.html"));

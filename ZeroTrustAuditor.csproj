@@ -38,6 +38,7 @@
     <Compile Include="src\Analysis\GuidanceCatalog.cs" />
     <Compile Include="src\Analysis\PolicyEvaluator.cs" />
     <Compile Include="src\Analysis\ZtmmScorer.cs" />
+    <Compile Include="src\Analysis\EnrichmentCorrelator.cs" />
     <Compile Include="src\Reports\SegmentationReportRenderer.cs" />
     <Compile Include="src\Checks\AdAuditor.cs" />
     <Compile Include="src\Checks\ProtocolProbe.cs" />

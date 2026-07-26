@@ -290,6 +290,7 @@ Confirm the remaining matrix rows before treating the estate as segmented.</div>
     <span class="score">{f.RiskScore:F1}</span>
   </div>
   <p>{E(f.Description)}</p>
+{RenderEnrichment(f)}
   <p class="remedy"><strong>Fix:</strong> {E(f.Remediation)}</p>
   <details><summary>Evidence &amp; guidance</summary>
     <pre class="ev">{E(f.Evidence.ToString())}
@@ -385,6 +386,22 @@ should avoid regressing.</p>
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
+        /// <summary>
+        /// Host weaknesses that make this reachable path worse. Rendered inline
+        /// rather than hidden in the evidence block: the combination is the point.
+        /// </summary>
+        private static string RenderEnrichment(SegmentationFinding f)
+        {
+            if (f.EnrichmentNotes.Count == 0) return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine("  <div class=\"enrich\"><strong>Why this path is worse than it looks</strong><ul>");
+            foreach (var note in f.EnrichmentNotes)
+                sb.AppendLine($"    <li>{E(note)}</li>");
+            sb.AppendLine("  </ul></div>");
+            return sb.ToString();
+        }
+
         private static string E(string? s) => WebUtility.HtmlEncode(s ?? string.Empty);
 
         private static string SevClass(Severity s) => s switch
@@ -461,6 +478,10 @@ code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;backgrou
 .fhead .score{margin-left:auto;font-weight:700;color:#6b7280}
 .finding p{font-size:12.5px;margin-bottom:5px;max-width:110ch}
 .remedy{color:#14532d}
+.enrich{background:#fff7ed;border-left:3px solid #fb923c;border-radius:0 6px 6px 0;
+        padding:8px 12px;margin:7px 0;font-size:12px}
+.enrich strong{display:block;margin-bottom:4px;color:#9a3412;font-size:11.5px}
+.enrich ul{margin-left:16px}.enrich li{margin:2px 0;color:#4b5563}
 details{margin-top:7px}summary{cursor:pointer;font-size:11.5px;color:#4b5563}
 pre.ev{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;background:#f9fafb;
        padding:7px 9px;border-radius:5px;margin:7px 0;white-space:pre-wrap;word-break:break-word}
