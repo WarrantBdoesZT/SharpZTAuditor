@@ -137,7 +137,10 @@
 
   "network": {
     "portProbeTimeoutMs": 3000,
-    "maxParallelProbes": 50,
+    "maxParallelProbes": 128,
+    "probesPerSecond": 100,
+    "retriesOnTimeout": 1,
+    "grabBanners": true,
     "adminPorts": {
       "RDP":        3389,
       "SMB":        445,

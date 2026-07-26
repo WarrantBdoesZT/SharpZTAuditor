@@ -195,6 +195,31 @@ namespace ZeroTrustAuditor.Models
         {
             "SMB", "WinRM", "WMI", "RDP"
         };
+
+        /// <summary>
+        /// Hard ceiling on simultaneous in-flight probes. This key was present in
+        /// audit-config.json from the beginning but had no property to bind to and
+        /// was enforced nowhere, so probing fanned out unbounded -- exhausting the
+        /// ephemeral port range and turning the resulting timeouts into false
+        /// "filtered" verdicts.
+        /// </summary>
+        [JsonPropertyName("maxParallelProbes")]
+        public int MaxParallelProbes { get; set; } = 128;
+
+        /// <summary>Outbound probe rate ceiling. Zero disables pacing.</summary>
+        [JsonPropertyName("probesPerSecond")]
+        public int ProbesPerSecond { get; set; } = 100;
+
+        /// <summary>Retries when a probe times out, to separate packet loss from filtering.</summary>
+        [JsonPropertyName("retriesOnTimeout")]
+        public int RetriesOnTimeout { get; set; } = 1;
+
+        /// <summary>
+        /// Passively read the banner an open service volunteers, to check that the
+        /// port number matches the service actually listening. Nothing is sent.
+        /// </summary>
+        [JsonPropertyName("grabBanners")]
+        public bool GrabBanners { get; set; } = true;
     }
 
     public class ReportingSettings

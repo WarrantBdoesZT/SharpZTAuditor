@@ -72,7 +72,31 @@ namespace ZeroTrustAuditor
                     $"policy rules: {segmentation.Policy.Rules.Count}; " +
                     $"service classes: {segmentation.Services.ServiceClasses.Count}");
 
-            var orchestrator = new Orchestrator(config, segmentation);
+            var probeOptions = new Network.ProbeOptions
+            {
+                TimeoutMs        = config.Network.PortProbeTimeoutMs,
+                MaxConcurrency   = opts.MaxConcurrency  ?? config.Network.MaxParallelProbes,
+                ProbesPerSecond  = opts.ProbesPerSecond ?? config.Network.ProbesPerSecond,
+                RetriesOnTimeout = config.Network.RetriesOnTimeout,
+                GrabBanners      = config.Network.GrabBanners,
+                AllowOtProbing   = opts.AllowOtProbing,
+                DryRun           = opts.DryRun,
+            };
+
+            Console.WriteLine(
+                $"[*] Probe budget: max {probeOptions.MaxConcurrency} concurrent, " +
+                $"{(probeOptions.ProbesPerSecond <= 0 ? "unlimited" : probeOptions.ProbesPerSecond + "/sec")}, " +
+                $"{probeOptions.TimeoutMs}ms timeout, {probeOptions.RetriesOnTimeout} retry(s)");
+
+            if (probeOptions.DryRun)
+                Console.WriteLine("[*] DRY RUN -- probes will be planned but no packets sent.");
+
+            if (probeOptions.AllowOtProbing)
+                Console.WriteLine(
+                    "[!] OT/ICS active probing ENABLED. Controllers can fault on unexpected " +
+                    "connections -- confirm you have written approval from the OT owner.");
+
+            var orchestrator = new Orchestrator(config, segmentation, probeOptions);
             var renderer     = new ReportRenderer();
             var siem         = new SiemRenderer(config);
 
@@ -136,6 +160,28 @@ namespace ZeroTrustAuditor
                         foreach (var p in topPaths.Take(5))
                             Console.WriteLine($"    [{p.RiskScore:F1}] {p.Summary}");
                     }
+                }
+
+                // ── Raw reachability observations ─────────────────────────────
+                // Written whenever probing ran, because Filtered results never
+                // become findings yet are the evidence a boundary control works.
+                if (orchestrator.Observations.Count > 0)
+                {
+                    var vantageZone = "unknown";
+                    if (segmentation.IsConfigured)
+                    {
+                        var localIp = Network.LocalAddressProvider.Primary();
+                        vantageZone = segmentation.Zones.Resolve(localIp).Id;
+                    }
+
+                    new ReachabilityRenderer().Write(
+                        orchestrator.Observations,
+                        orchestrator.ProbeStatistics,
+                        vantageZone,
+                        Path.Combine(opts.OutputDir, $"reachability-{stamp}.json"));
+
+                    if (orchestrator.ProbeStatistics != null)
+                        Console.WriteLine($"[*] Probes: {orchestrator.ProbeStatistics}");
                 }
 
                 Console.WriteLine($"\n[+] Reports written to: {Path.GetFullPath(opts.OutputDir)}");
@@ -205,6 +251,13 @@ namespace ZeroTrustAuditor
                 "             checks are SKIPPED rather than guessed at.\n" +
                 "  --policy   policy.json        Approved cross-zone flows (default-deny).\n" +
                 "  --services services.json      High-risk service catalog.\n" +
+                "\nProbe safety:\n" +
+                "  --max-concurrency 128         Ceiling on simultaneous probes.\n" +
+                "  --rate 100                    Probes per second (0 = unlimited).\n" +
+                "  --dry-run                     Plan the probes, send nothing.\n" +
+                "  --allow-ot-probing            Permit ACTIVE probing of OT/ICS services.\n" +
+                "             Off by default: an unexpected TCP connect can fault a\n" +
+                "             controller. Also requires activeProbing=true on the zone.\n" +
                 "  --help, -h Show this help text");
         }
 
@@ -219,7 +272,11 @@ namespace ZeroTrustAuditor
             bool      NoGraph,
             string?   ZonesPath,
             string?   PolicyPath,
-            string?   ServicesPath);
+            string?   ServicesPath,
+            int?      MaxConcurrency,
+            int?      ProbesPerSecond,
+            bool      AllowOtProbing,
+            bool      DryRun);
 
         static Options? ParseArgs(string[] args)
         {
@@ -230,9 +287,13 @@ namespace ZeroTrustAuditor
             string? configPath   = null;
             string? skipModules  = null;
             bool    noGraph      = false;
-            string? zonesPath    = null;
-            string? policyPath   = null;
-            string? servicesPath = null;
+            string? zonesPath      = null;
+            string? policyPath     = null;
+            string? servicesPath   = null;
+            int?    maxConcurrency = null;
+            int?    probesPerSec   = null;
+            bool    allowOtProbing = false;
+            bool    dryRun         = false;
 
             // Fix: use args.Length (not args.Length - 1) so the last flag is never skipped.
             // Each value flag consumes args[i] (the flag) and args[++i] (the value),
@@ -259,6 +320,18 @@ namespace ZeroTrustAuditor
                         if (i + 1 < args.Length) policyPath   = args[++i]; break;
                     case "--services":
                         if (i + 1 < args.Length) servicesPath = args[++i]; break;
+                    case "--max-concurrency":
+                        if (i + 1 < args.Length && int.TryParse(args[++i], out var mc))
+                            maxConcurrency = mc;
+                        break;
+                    case "--rate":
+                        if (i + 1 < args.Length && int.TryParse(args[++i], out var rate))
+                            probesPerSec = rate;
+                        break;
+                    case "--allow-ot-probing":
+                        allowOtProbing = true; break;
+                    case "--dry-run":
+                        dryRun = true; break;
                     case "--no-graph":
                         noGraph = true; break;
                 }
@@ -325,7 +398,8 @@ namespace ZeroTrustAuditor
                     StringSplitOptions.TrimEntries);
 
             return new Options(hosts, domain, outputDir, configPath, skipList, noGraph,
-                               zonesPath, policyPath, servicesPath);
+                               zonesPath, policyPath, servicesPath,
+                               maxConcurrency, probesPerSec, allowOtProbing, dryRun);
         }
 
         static void PrintBanner()
