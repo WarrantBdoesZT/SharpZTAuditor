@@ -1,6 +1,7 @@
 # ZeroTrustAuditor v2.0
 
-> **Read-only Zero Trust misconfiguration assessment for Windows Active Directory environments.**
+> **Read-only internal network segmentation assessment, from an assumed-breach posture.**
+> Answers one question: *from where I stand, what can I reach that I should not be able to?*
 > Pure C# — no PowerShell, no WMI, no external processes. Compiles to a single self-contained executable.
 
 ![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
@@ -14,58 +15,111 @@
 
 ## What problem does this solve?
 
-In a Zero Trust environment, you assume an attacker is already inside your network. The question is not *if* they got in — it is *how far can they go?* ZeroTrustAuditor answers that question by reading the configuration of your Active Directory, your servers, and your network, then flagging every misconfiguration that would let an attacker move laterally, escalate privileges, or reach a Domain Controller.
+You assume an attacker already has a foothold inside your network. The question is not *if* they got in — it is **how far can they go before something stops them?**
 
-Think of it as a thorough checklist that never forgets a question. It tells you what is wrong, how dangerous it is, which MITRE ATT&CK technique it maps to, and exactly how to fix it.
+ZeroTrustAuditor answers that by probing outward from where it runs and comparing what it can actually reach against what your segmentation policy says should be reachable. The unit of analysis is a **path** — `source zone → target endpoint : port` — because a segmentation flaw is never a property of a host on its own.
+
+It reports which servers and endpoints allow high-risk ports, from which network segments, how far a compromise of each would spread, and what NSA and CISA guidance says to do about it.
+
+**The distinction that matters most.** A failed connection has three meanings, and collapsing them makes the results worthless:
+
+| Wire behaviour | Verdict | What it tells you |
+|---|---|---|
+| SYN/ACK | **Open** | A service is listening and the path is open |
+| RST | **Closed** | The host *answered* — packets reach it, **nothing is filtering** |
+| dropped / ICMP prohibited | **Filtered** | A boundary control **is** enforcing |
+| no answer possible | **Unknown** | Nothing can be concluded — never counted as a pass |
+
+`Closed` is the one people miss. Nothing is exposed today, but nothing is blocking either: the moment that service is installed, the path is open. That is the difference between being segmented and being lucky.
 
 **What it is NOT:**
 - It does not exploit vulnerabilities
 - It does not capture credentials
 - It does not make any changes to the environment
-- It does not require Domain Admin rights
-
-Every check is equivalent to reading configuration data that a standard domain user already has access to.
+- The segmentation engine needs **no credentials at all**; the optional enrichment checks need a standard domain user
 
 ---
 
-## How it works — the audit flow
+## How it works — the architecture
 
 ```
-You run the exe
-      │
-      ▼
-Reads audit-config.json
-      │
-      ▼
-┌─────────────────────────────────────────────────────┐
-│              Five checks run in PARALLEL             │
-│                                                      │
-│  AdAuditor  ProtocolProbe  LateralPath  Share  Seg  │
-└─────────────────────────────────────────────────────┘
-      │
-      ▼
-All findings collected → Deduplicated → Scored
-      │
-      ▼
-Correlation rules applied (dangerous combos get boosted)
-      │
-      ▼
-Reports written: JSON · HTML · CSV · Splunk · Sentinel · CEF
+   zones.json            policy.json           services.json
+ CIDR → zone, tier    approved cross-zone     high-risk service
+ role, safe mode         flows (deny by         catalog, OT
+                          default)             passive-only
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              ▼
+                   ┌─────────────────────┐
+                   │    ZoneResolver     │  longest-prefix CIDR match
+                   │                     │  IPv4 + IPv6
+                   └──────────┬──────────┘
+                              │
+ ┌────────────────────────────▼─────────────────────────────────┐
+ │  ProbeEngine                       UNAUTHENTICATED · the spine│
+ │                                                               │
+ │  bounded concurrency · rate limited · retries on timeout      │
+ │  OT/ICS interlock · --dry-run · passive banner confirmation   │
+ │                                                               │
+ │      SYN/ACK → Open      RST → Closed      drop → Filtered    │
+ └────────────────────────────┬─────────────────────────────────┘
+                              │ ReachabilityObservation[]
+                              │ stamped with its source zone
+                              ▼
+                   ┌─────────────────────┐
+                   │   PolicyEvaluator   │  observed vs. declared
+                   │                     │  → Violation · Unenforced
+                   │                     │    Enforced · Drift
+                   └──────────┬──────────┘    Compliant
+                              │ SegmentationFinding[]  (path-keyed)
+                              ▼
+                   ┌─────────────────────┐      ┌─────────────────────┐
+                   │ EnrichmentCorrelator│◄─────┤  ENRICHMENT TIER    │
+                   │                     │      │  optional — needs a │
+                   │ a host weakness only│      │  domain user        │
+                   │ matters if you can  │      │                     │
+                   │ reach the service   │      │  AdAuditor          │
+                   │ it affects          │      │  ProtocolProbe      │
+                   └──────────┬──────────┘      │  ShareAuditor       │
+                              │                 │  LateralPathAnalyzer│
+                              │                 └─────────────────────┘
+                              ▼
+ ┌───────────────────────────────────────────────────────────────┐
+ │  Zone reachability matrix   ·   Endpoint exposure register     │
+ │  Policy violations          ·   CISA ZTMM scorecard            │
+ │  Enforcement evidence       ·   NSA / CISA guidance per finding│
+ └───────────────────────────────────────────────────────────────┘
+      segmentation-*.html · .json · exposure-register-*.csv
+                              +
+                     reachability-*.json  ── raw observations
+                              │
+                              ▼
+                  ZeroTrustAuditor merge <files...>
+              unions captures from several vantage zones
+                  so the matrix gains rows, honestly
 ```
 
-**Step by step:**
+**Reachability is the spine.** Everything else either feeds it context or reports on it.
 
-1. **You provide a host list and domain name.** Either comma-separated on the command line or a plain text file with one hostname per line.
-2. **Five audit checks launch simultaneously.** Each is an independent C# class running as a parallel async task. They do not wait for each other — all five run at the same time.
-3. **Each check queries its target using read-only .NET APIs.** No scripts are written to disk. No commands are executed on target hosts.
-4. **All findings flow into the aggregator.** Duplicates are removed. Risk scores are assigned. Correlation rules boost scores for dangerous combinations.
-5. **Reports are written** in all configured formats for humans, machines, and SIEM platforms.
+1. **Zones come from declared CIDRs**, matched longest-prefix, so a tier-0 `/24` correctly wins over the `/8` that contains it. Segment boundaries are never inferred from an address octet.
+2. **The probe engine runs unauthenticated** and records *why* each path failed, not just that it did. This is what makes a working firewall distinguishable from a powered-off host.
+3. **Policy turns observations into findings.** Without a declared baseline, every approved administration path is reported as a problem and triage stays manual forever.
+4. **Enrichment is optional and additive.** AD and host-configuration weaknesses attach to the reachable paths they make worse and escalate severity; they never gate the assessment. If you have no domain credentials, you still get the segmentation report.
+5. **One run measures one source zone.** Unmeasured zone pairs render as *not assessed* and are excluded from scoring — never quietly treated as clean. `merge` combines runs from different zones to fill in the rest.
 
 ---
 
-## The five audit modules
+## The check modules
 
-### 1. AdAuditor — Active Directory misconfigurations
+Two tiers, and the distinction is load-bearing.
+
+**`SegmentationChecker` is the primary engine.** It runs unauthenticated, drives the probe engine, and produces the reachability findings the report is built around.
+
+**The other four are the enrichment tier.** They read Active Directory, host registry and share ACLs to explain *why a reachable path is worse than it looks* — unsigned SMB on a reachable 445, no LAPS on a reachable RDP. They require a standard domain user and, on some checks, the Remote Registry service. **If they cannot run, the segmentation assessment still completes**; you simply lose the host context that escalates findings.
+
+They also still report in their own right, so nothing is lost by keeping them enabled.
+
+### 1. AdAuditor — Active Directory misconfigurations *(enrichment)*
 
 Uses `System.DirectoryServices.DirectorySearcher` (LDAP) and `System.DirectoryServices.AccountManagement`. Requires only a standard Domain User account.
 
@@ -84,7 +138,7 @@ Uses `System.DirectoryServices.DirectorySearcher` (LDAP) and `System.DirectorySe
 
 ---
 
-### 2. ProtocolProbe — Insecure protocol configurations
+### 2. ProtocolProbe — Insecure protocol configurations *(enrichment)*
 
 Uses `Microsoft.Win32.RegistryKey.OpenRemoteBaseKey()` to read remote registry values and `System.Net.Sockets.TcpClient` for port checks. No PowerShell. No WMI.
 
@@ -101,7 +155,7 @@ Uses `Microsoft.Win32.RegistryKey.OpenRemoteBaseKey()` to read remote registry v
 
 ---
 
-### 3. LateralPathAnalyzer — Lateral movement paths
+### 3. LateralPathAnalyzer — Lateral movement paths *(enrichment)*
 
 Uses `System.DirectoryServices.AccountManagement` to enumerate local security groups on each target and maps which accounts can reach which hosts.
 
@@ -116,7 +170,7 @@ Uses `System.DirectoryServices.AccountManagement` to enumerate local security gr
 
 ---
 
-### 4. ShareAuditor — Over-permissive file shares
+### 4. ShareAuditor — Over-permissive file shares *(enrichment)*
 
 Uses `System.IO.DirectoryInfo.GetAccessControl()` and `System.Security.AccessControl.FileSystemAccessRule` to read NTFS ACLs via UNC path. No SMB enumeration cmdlets needed.
 
@@ -129,7 +183,7 @@ Uses `System.IO.DirectoryInfo.GetAccessControl()` and `System.Security.AccessCon
 
 ---
 
-### 5. SegmentationChecker — Network segmentation gaps
+### 5. SegmentationChecker — Network segmentation *(primary engine)*
 
 Uses `System.Net.Sockets.TcpClient` for port probing and remote registry reads for firewall and logging configuration. Verifies that your network segmentation actually prevents lateral movement.
 
@@ -297,6 +351,8 @@ WS01
 
 ### Available flags
 
+**Scope**
+
 | Flag | Description |
 |---|---|
 | `--hosts h1,h2` | Comma-separated list of hostnames |
@@ -304,9 +360,32 @@ WS01
 | `--domain corp.local` | Active Directory domain FQDN **(required)** |
 | `--output ./reports` | Output directory for reports (default: `./reports`) |
 | `--config audit-config.json` | Path to config file (default: `audit-config.json` next to exe) |
-| `--skip-modules A,B` | Skip specific modules: `AdAuditor`, `ProtocolProbe`, `LateralPathAnalyzer`, `ShareAuditor`, `SegmentationChecker` |
+| `--skip-modules A,B` | Skip modules: `AdAuditor`, `ProtocolProbe`, `LateralPathAnalyzer`, `ShareAuditor`, `SegmentationChecker` |
 | `--no-graph` | Skip lateral movement graph generation |
 | `--help`, `-h` | Show usage and exit |
+
+**Segmentation** — without `--zones` (or a `zones.json` beside the exe) cross-zone analysis is skipped, not guessed at.
+
+| Flag | Description |
+|---|---|
+| `--zones zones.json` | Zone map: CIDR → zone, trust tier, role |
+| `--policy policy.json` | Approved cross-zone flows (default-deny) |
+| `--services services.json` | High-risk service catalog |
+
+**Probe safety**
+
+| Flag | Description |
+|---|---|
+| `--dry-run` | Plan every probe and send nothing |
+| `--rate 100` | Probes per second (`0` = unlimited) |
+| `--max-concurrency 128` | Ceiling on simultaneous probes |
+| `--allow-ot-probing` | Permit **active** probing of OT/ICS services. Off by default — an unexpected TCP connect can fault a controller. Also requires `activeProbing: true` on the target zone. |
+
+**Subcommand**
+
+| Command | Description |
+|---|---|
+| `merge <files...>` | Union reachability captures from several vantage zones. Accepts `--output`, `--report`, `--zones`, `--policy`, `--services`. Run `ZeroTrustAuditor merge` with no arguments for usage. |
 
 Set the environment variable `ZTA_DEBUG=1` to print full stack traces on fatal errors (off by default -- normal runs print a plain-English message and a hint instead).
 
@@ -316,6 +395,17 @@ Set the environment variable `ZTA_DEBUG=1` to print full stack traces on fatal e
 
 All formats are written to the `--output` directory with a timestamp in the filename.
 
+**Segmentation assessment** — produced when a zone map is configured.
+
+| File | Contents |
+|---|---|
+| `segmentation-TIMESTAMP.html` | Zone matrix, exposure register, violations, ZTMM scorecard, NSA/CISA guidance |
+| `segmentation-TIMESTAMP.json` | The same analysis, machine-readable |
+| `exposure-register-TIMESTAMP.csv` | Which endpoints allow which high-risk ports — for ticketing |
+| `reachability-TIMESTAMP.json` | Every raw probe outcome including `Filtered`. Input to `merge`. |
+
+**Host findings** — the enrichment tier and legacy checks.
+
 | Format | File | Use case |
 |---|---|---|
 | HTML | `audit-TIMESTAMP.html` | Human-readable report — open in any browser |
@@ -324,6 +414,8 @@ All formats are written to the `--output` directory with a timestamp in the file
 | Splunk HEC | `audit-TIMESTAMP.splunk.json` | Push to Splunk HTTP Event Collector |
 | Sentinel | `audit-TIMESTAMP.sentinel.json` | Ingest to Microsoft Sentinel Log Analytics |
 | CEF | `audit-TIMESTAMP.cef` | Syslog forwarding to ArcSight, QRadar, or any CEF collector |
+
+All output is UTF-8 **without a BOM** — a leading BOM makes JSON invalid per RFC 8259 and is rejected by Splunk HEC and Sentinel ingestion.
 
 Enable additional formats in `audit-config.json`:
 
@@ -393,24 +485,61 @@ Every finding maps to a specific MITRE ATT&CK technique:
 
 ```
 ZeroTrustAuditor/
-├── ZeroTrustAuditor.csproj     Entry point project file
-├── audit-config.json           Runtime configuration
+├── audit-config.json          Thresholds, probe budget, output formats
+├── zones.example.json         Zone map template  → copy to zones.json
+├── policy.example.json        Approved-flow template → copy to policy.json
+├── services.json              High-risk service catalog (38 classes)
 └── src/
-    ├── Program.cs              CLI argument parsing, report dispatch
-    ├── Orchestrator.cs         Parallel task runner, deduplication, correlation
+    ├── Program.cs                     CLI, subcommand dispatch, report wiring
+    ├── Orchestrator.cs                Parallel module runner, dedup, correlation
+    │
+    ├── Commands/
+    │   └── MergeCommand.cs            `merge` — union captures across vantages
+    │
+    ├── Network/                       ── the segmentation engine ──
+    │   ├── IpRange.cs                 CIDR containment, IPv4 + IPv6
+    │   ├── ZoneResolver.cs            Longest-prefix address → zone
+    │   ├── LocalAddressProvider.cs    Source address the OS would route from
+    │   ├── TcpProbe.cs                Tri-state connect: Open/Closed/Filtered
+    │   ├── ProbeEngine.cs             Bounded, paced, retrying, OT-gated
+    │   ├── RateLimiter.cs             Token bucket
+    │   ├── TargetExpander.cs          CIDR and range → addresses
+    │   └── ZonePairRisk.cs            Severity from the zone pair, not the port
+    │
+    ├── Analysis/                      ── observed vs. expected ──
+    │   ├── PolicyEvaluator.cs         Findings, zone matrix, exposure register
+    │   ├── EnrichmentCorrelator.cs    Host weaknesses escalate reachable paths
+    │   ├── ObservationMerger.cs       Multi-vantage union + conflict handling
+    │   ├── ZtmmScorer.cs              CISA ZTMM Networks-pillar scoring
+    │   └── GuidanceCatalog.cs         NSA / CISA citations per finding
+    │
+    ├── Config/
+    │   └── SegmentationConfigLoader.cs  Load + validate zones/policy/services
+    │
     ├── Models/
-    │   ├── Finding.cs          Finding data model (Id, Host, CheckName, Severity, ...)
-    │   └── AuditConfig.cs      Config model + loader + validation
-    ├── Checks/
-    │   ├── CheckBase.cs        Shared helpers: port probe, remote registry, finding factory
-    │   ├── AdAuditor.cs        System.DirectoryServices LDAP queries
-    │   ├── ProtocolProbe.cs    Remote registry + TcpClient port checks
-    │   ├── LateralPathAnalyzer.cs  AccountManagement local group enumeration
-    │   ├── ShareAuditor.cs     System.Security.AccessControl UNC ACL reads
-    │   └── SegmentationChecker.cs  TcpClient port probing + registry firewall checks
+    │   ├── SegmentationFinding.cs     Path-keyed finding (vantage → target : port)
+    │   ├── SegmentationAnalysis.cs    Matrix, exposure register, scorecard
+    │   ├── SegmentationPolicy.cs      Default-deny rules with owners and expiry
+    │   ├── Zone.cs · ServiceCatalog.cs · ReachabilityDocument.cs
+    │   ├── StringOrArrayConverter.cs  Accepts "a" or ["a","b"] in policy rules
+    │   ├── GraphModel.cs              Lateral movement graph nodes and edges
+    │   ├── Finding.cs                 Legacy host-keyed finding (enrichment tier)
+    │   └── AuditConfig.cs             Config model + loader
+    │
+    ├── PathGraphBuilder.cs            Attack-path graph from enrichment findings
+    │
+    ├── Checks/                        ── enrichment tier ──
+    │   ├── SegmentationChecker.cs     Drives ProbeEngine (primary)
+    │   ├── CheckBase.cs               Tri-state registry reads, finding factory
+    │   ├── AdAuditor.cs · ProtocolProbe.cs
+    │   └── ShareAuditor.cs · LateralPathAnalyzer.cs
+    │
     └── Reports/
-        ├── ReportRenderer.cs   JSON, CSV, HTML output
-        └── SiemRenderer.cs     Splunk HEC, Sentinel, CEF output + MITRE mapping
+        ├── SegmentationReportRenderer.cs  Matrix, register, scorecard, guidance
+        ├── ReachabilityRenderer.cs        Raw observations (merge input)
+        ├── ReportRenderer.cs              Legacy JSON / CSV / HTML
+        ├── SiemRenderer.cs                Splunk HEC · Sentinel · CEF
+        └── GraphRenderer.cs               Lateral movement graph
 ```
 
 ### Tests
