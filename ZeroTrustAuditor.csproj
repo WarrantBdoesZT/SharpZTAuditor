@@ -34,6 +34,11 @@
     <Compile Include="src\Network\ProbeEngine.cs" />
     <Compile Include="src\Network\TargetExpander.cs" />
     <Compile Include="src\Reports\ReachabilityRenderer.cs" />
+    <Compile Include="src\Models\SegmentationAnalysis.cs" />
+    <Compile Include="src\Analysis\GuidanceCatalog.cs" />
+    <Compile Include="src\Analysis\PolicyEvaluator.cs" />
+    <Compile Include="src\Analysis\ZtmmScorer.cs" />
+    <Compile Include="src\Reports\SegmentationReportRenderer.cs" />
     <Compile Include="src\Checks\AdAuditor.cs" />
     <Compile Include="src\Checks\ProtocolProbe.cs" />
     <Compile Include="src\Checks\LateralPathAnalyzer.cs" />

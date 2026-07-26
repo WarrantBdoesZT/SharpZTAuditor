@@ -167,12 +167,10 @@ namespace ZeroTrustAuditor
                 // become findings yet are the evidence a boundary control works.
                 if (orchestrator.Observations.Count > 0)
                 {
-                    var vantageZone = "unknown";
-                    if (segmentation.IsConfigured)
-                    {
-                        var localIp = Network.LocalAddressProvider.Primary();
-                        vantageZone = segmentation.Zones.Resolve(localIp).Id;
-                    }
+                    var vantageIp   = Network.LocalAddressProvider.Primary();
+                    var vantageZone = segmentation.IsConfigured
+                        ? segmentation.Zones.Resolve(vantageIp).Id
+                        : "unknown";
 
                     new ReachabilityRenderer().Write(
                         orchestrator.Observations,
@@ -182,6 +180,31 @@ namespace ZeroTrustAuditor
 
                     if (orchestrator.ProbeStatistics != null)
                         Console.WriteLine($"[*] Probes: {orchestrator.ProbeStatistics}");
+
+                    // ── Segmentation analysis: observed vs declared policy ─────
+                    if (segmentation.IsConfigured)
+                    {
+                        var analysis = new Analysis.PolicyEvaluator(segmentation).Analyze(
+                            orchestrator.Observations,
+                            Environment.MachineName,
+                            vantageIp);
+
+                        var segRenderer = new SegmentationReportRenderer();
+                        segRenderer.WriteHtml(analysis,
+                            Path.Combine(opts.OutputDir, $"segmentation-{stamp}.html"));
+                        segRenderer.WriteJson(analysis,
+                            Path.Combine(opts.OutputDir, $"segmentation-{stamp}.json"));
+                        segRenderer.WriteExposureCsv(analysis,
+                            Path.Combine(opts.OutputDir, $"exposure-register-{stamp}.csv"));
+
+                        PrintSegmentationSummary(analysis);
+                    }
+                    else
+                    {
+                        Console.WriteLine(
+                            "[!] No zone map configured -- the segmentation report " +
+                            "(matrix, exposure register, ZTMM scorecard) was not produced.");
+                    }
                 }
 
                 Console.WriteLine($"\n[+] Reports written to: {Path.GetFullPath(opts.OutputDir)}");
@@ -197,6 +220,27 @@ namespace ZeroTrustAuditor
                 PrintFriendlyError(ex);
                 return 3;
             }
+        }
+
+        static void PrintSegmentationSummary(Models.SegmentationAnalysis analysis)
+        {
+            var violations = analysis.Violations.ToList();
+            var critical   = violations.Count(v => v.Severity == Models.Severity.Critical);
+
+            Console.WriteLine();
+            Console.WriteLine($"[*] Segmentation (from zone '{analysis.VantageZoneId}'):");
+            Console.WriteLine($"    Violations       {violations.Count} ({critical} critical)");
+            Console.WriteLine($"    Unenforced paths {analysis.Unenforced.Count()}");
+            Console.WriteLine($"    Enforced (good)  {analysis.EnforcementEvidence.Count()}");
+            Console.WriteLine($"    Zone pairs       {analysis.Matrix.AssessedPairs}/{analysis.Matrix.TotalPairs} assessed");
+
+            var segmentationScore = analysis.Scorecard.Functions
+                .FirstOrDefault(f => f.Function == "Network Segmentation");
+            if (segmentationScore is { Assessed: true })
+                Console.WriteLine($"    CISA ZTMM        Network Segmentation = {segmentationScore.Stage}");
+
+            foreach (var f in violations.Where(v => v.Severity == Models.Severity.Critical).Take(5))
+                Console.WriteLine($"    [CRITICAL] {f.VantageZoneId} -> {f.TargetIp}:{f.Port} ({f.ServiceClass})");
         }
 
         // ── Error reporting ───────────────────────────────────────────────────
