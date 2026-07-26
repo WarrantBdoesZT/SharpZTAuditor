@@ -6,6 +6,7 @@ using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using ZeroTrustAuditor.Checks;
+using ZeroTrustAuditor.Config;
 using ZeroTrustAuditor.Models;
 
 namespace ZeroTrustAuditor
@@ -13,10 +14,12 @@ namespace ZeroTrustAuditor
     public class Orchestrator
     {
         private readonly AuditConfig _config;
+        private readonly SegmentationContext _segmentation;
 
-        public Orchestrator(AuditConfig config)
+        public Orchestrator(AuditConfig config, SegmentationContext? segmentation = null)
         {
-            _config = config;
+            _config       = config;
+            _segmentation = segmentation ?? new SegmentationContext();
         }
 
         public async Task<AuditReport> RunAsync(
@@ -83,7 +86,8 @@ namespace ZeroTrustAuditor
             {
                 Console.WriteLine("[*] Launching: SegmentationChecker");
                 tasks.Add(RunSafe("SegmentationChecker",
-                    () => new SegmentationChecker(_config, scopedHosts).RunAsync(), linked.Token));
+                    () => new SegmentationChecker(_config, scopedHosts, _segmentation).RunAsync(),
+                    linked.Token));
             }
 
             var results     = await Task.WhenAll(tasks);

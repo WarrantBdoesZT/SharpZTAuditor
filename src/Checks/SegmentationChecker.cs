@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Threading.Tasks;
+using ZeroTrustAuditor.Config;
 using ZeroTrustAuditor.Models;
+using ZeroTrustAuditor.Network;
 
 namespace ZeroTrustAuditor.Checks
 {
@@ -11,14 +13,24 @@ namespace ZeroTrustAuditor.Checks
     /// Network segmentation and logging gap checks.
     /// Uses TcpClient for port probing and remote registry for firewall/log config.
     /// No PowerShell, no WMI, no CIM.
+    ///
+    /// Segment boundaries come from the declared zone map (zones.json), resolved by
+    /// CIDR longest-prefix match. If no zone map is supplied, cross-zone analysis is
+    /// SKIPPED and reported as a gap rather than guessed at -- the previous
+    /// third-octet heuristic produced confident findings that were wrong in both
+    /// directions, which is worse than producing none.
     /// </summary>
     public class SegmentationChecker : CheckBase
     {
         private readonly string[] _hosts;
+        private readonly SegmentationContext _segmentation;
 
-        public SegmentationChecker(AuditConfig config, string[] hosts) : base(config)
+        public SegmentationChecker(
+            AuditConfig config, string[] hosts, SegmentationContext? segmentation = null)
+            : base(config)
         {
-            _hosts = hosts;
+            _hosts        = hosts;
+            _segmentation = segmentation ?? new SegmentationContext();
         }
 
         public async Task<List<Finding>> RunAsync()
@@ -26,11 +38,32 @@ namespace ZeroTrustAuditor.Checks
             var findings = new List<Finding>();
             Log($"Checking segmentation across {_hosts.Length} host(s)");
 
-            // Resolve audit workstation IP for cross-segment detection
-            var auditOctet = GetLocalOctet();
+            if (!_segmentation.IsConfigured)
+            {
+                Log("  No zone map configured -- cross-zone analysis skipped.");
+                findings.Add(MakeFinding(
+                    Config.Reporting.OrganizationName.Length > 0
+                        ? Config.Reporting.OrganizationName
+                        : "(environment)",
+                    "ZONE_MAP_NOT_CONFIGURED", Severity.Medium,
+                    "No zone map was supplied, so cross-zone exposure could not be assessed. " +
+                    "Segment boundaries cannot be inferred from IP addresses alone -- a /16 and " +
+                    "a /24 sharing an octet are not the same segment. Host-level checks below " +
+                    "still ran; the absence of cross-zone findings is NOT evidence of good " +
+                    "segmentation.",
+                    "zones.json absent or empty; ZoneResolver has no CIDR ranges.",
+                    "Copy zones.example.json to zones.json and declare your network segments " +
+                    "with their CIDRs and trust tiers, then re-run. See REARCHITECTURE.md.",
+                    subject: "zones.json"));
+            }
+            else
+            {
+                Log($"  Zone map: {_segmentation.Zones.Zones.Count} zone(s), " +
+                    $"{_segmentation.Zones.RangeCount} CIDR range(s)");
+            }
 
             // Parallel port probing across all hosts
-            var probeTasks = _hosts.Select(h => ProbeAndCheckAsync(h, auditOctet)).ToList();
+            var probeTasks = _hosts.Select(ProbeAndCheckAsync).ToList();
             foreach (var result in await Task.WhenAll(probeTasks))
                 findings.AddRange(result);
 
@@ -38,7 +71,7 @@ namespace ZeroTrustAuditor.Checks
             return findings;
         }
 
-        private async Task<List<Finding>> ProbeAndCheckAsync(string host, string? auditOctet)
+        private async Task<List<Finding>> ProbeAndCheckAsync(string host)
         {
             var findings = new List<Finding>();
             Log($"  Probing: {host}");
@@ -46,63 +79,12 @@ namespace ZeroTrustAuditor.Checks
             var ports = Config.Network.AdminPorts;
             var open  = await ProbePortsAsync(host, ports);
 
-            // Cross-segment detection
-            string? targetIP     = null;
-            string? targetOctet  = null;
-            bool    crossSegment = false;
-
-            try
-            {
-                var addresses = await Dns.GetHostAddressesAsync(host);
-                var ipv4 = addresses.FirstOrDefault(
-                    a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork);
-                if (ipv4 != null)
-                {
-                    targetIP    = ipv4.ToString();
-                    targetOctet = targetIP.Split('.')[2];
-                    crossSegment = auditOctet != null && targetOctet != auditOctet;
-                }
-            }
-            catch { }
-
-            // ── CHECK 1: Cross-segment admin port exposure ────────────────────
-            // The protocol list now comes from config.network.crossSegmentAdminPorts.
-            // It was previously hardcoded, so customising that config key did nothing.
-            var watched = new HashSet<string>(
-                Config.Network.CrossSegmentAdminPorts, StringComparer.OrdinalIgnoreCase);
-
-            foreach (var proto in open.Keys.Where(k => open[k]))
-            {
-                if (!crossSegment || !watched.Contains(proto)) continue;
-
-                if (proto.Equals("RDP", StringComparison.OrdinalIgnoreCase))
-                {
-                    findings.Add(MakeFinding(host,
-                        "CROSS_SEGMENT_RDP", Severity.High,
-                        $"RDP (port {ports[proto]}) is reachable on '{host}' ({targetIP ?? "unknown"}) " +
-                        "across network segments. Direct RDP from user networks to server segments " +
-                        "bypasses jump server controls.",
-                        $"Target={host} ({targetIP}); Protocol=RDP; CrossSegment=True",
-                        "Block RDP at the network boundary. " +
-                        "Require all RDP sessions to route through a hardened jump server. " +
-                        "Implement Just-In-Time RDP access via a PAM solution.",
-                        subject: proto));
-                }
-                else
-                {
-                    findings.Add(MakeFinding(host,
-                        "CROSS_SEGMENT_ADMIN_PORT", Severity.High,
-                        $"Admin protocol {proto} (port {ports[proto]}) is reachable on " +
-                        $"'{host}' ({targetIP ?? "unknown"}) from a different network segment. " +
-                        "This enables lateral movement across segment boundaries.",
-                        $"Target={host} ({targetIP}); Protocol={proto}; AuditOctet={auditOctet}; TargetOctet={targetOctet}",
-                        "Block SMB (445), WinRM (5985/5986), WMI (135) between user and server " +
-                        "VLANs at the firewall level. Use jump servers for cross-segment admin access.",
-                        // Subject = protocol. Without it, SMB/WMI/WinRM all share
-                        // Host+CheckName and deduplication keeps only ONE of them.
-                        subject: proto));
-                }
-            }
+            // ── CHECK 1: Cross-ZONE admin port exposure ───────────────────────
+            // Zone membership comes from declared CIDRs, and the vantage address is
+            // the one the OS would actually route from to THIS target -- not an
+            // arbitrary NIC picked by enumeration order.
+            if (_segmentation.IsConfigured)
+                await CheckCrossZoneExposureAsync(host, open, ports, findings);
 
             // ── CHECK 2: Windows Firewall state (via registry) ────────────────
             CheckFirewallState(host, findings);
@@ -114,6 +96,131 @@ namespace ZeroTrustAuditor.Checks
             CheckWefConfig(host, findings);
 
             return findings;
+        }
+
+        // ── CHECK 1: Cross-zone exposure ──────────────────────────────────────
+
+        private async Task CheckCrossZoneExposureAsync(
+            string host, Dictionary<string, bool> open,
+            Dictionary<string, int> ports, List<Finding> findings)
+        {
+            var targetIp = await ResolveAsync(host);
+            if (targetIp == null)
+            {
+                Log($"  {host} did not resolve to an IP -- zone cannot be determined.");
+                return;
+            }
+
+            var vantageIp = LocalAddressProvider.ForTarget(targetIp)
+                         ?? LocalAddressProvider.Primary();
+
+            if (vantageIp == null)
+            {
+                Log($"  Could not determine the local address used to reach {host}.");
+                return;
+            }
+
+            var targetKnown  = _segmentation.Zones.TryResolve(targetIp, out var targetZone);
+            var vantageKnown = _segmentation.Zones.TryResolve(vantageIp, out var vantageZone);
+
+            if (!vantageKnown)
+            {
+                // Without knowing where we are standing, "cross-zone" is meaningless.
+                findings.Add(MakeFinding(host,
+                    "VANTAGE_ZONE_UNKNOWN", Severity.Medium,
+                    $"The audit host's own address {vantageIp} matches no declared zone, so " +
+                    "cross-zone findings for this run cannot be attributed to a source segment. " +
+                    "Every result below is unanchored.",
+                    $"VantageIp={vantageIp}; TargetIp={targetIp}",
+                    "Add the audit workstation's subnet to zones.json so results can be " +
+                    "attributed to a source zone.",
+                    subject: vantageIp.ToString()));
+                return;
+            }
+
+            if (!targetKnown)
+            {
+                findings.Add(MakeFinding(host,
+                    "TARGET_ZONE_UNKNOWN", Severity.Low,
+                    $"'{host}' ({targetIp}) matches no declared zone CIDR. It is being treated as " +
+                    "untrusted for scoring. An unmapped host is a data-flow-mapping gap: NSA's " +
+                    "Network and Environment pillar names data flow mapping as the capability " +
+                    "segmentation depends on.",
+                    $"TargetIp={targetIp}; VantageZone={vantageZone.Id}",
+                    "Add this host's subnet to zones.json, or remove the host from scope if it " +
+                    "is not part of the estate.",
+                    subject: targetIp.ToString()));
+            }
+
+            // Same zone is not automatically safe, but it is not a BOUNDARY failure.
+            if (string.Equals(vantageZone.Id, targetZone.Id, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var watched = new HashSet<string>(
+                Config.Network.CrossSegmentAdminPorts, StringComparer.OrdinalIgnoreCase);
+
+            var matchedRange = _segmentation.Zones.MatchingRange(targetIp);
+
+            foreach (var proto in open.Keys.Where(k => open[k]))
+            {
+                if (!watched.Contains(proto)) continue;
+                if (!ports.TryGetValue(proto, out var port)) continue;
+
+                // Map the probed protocol onto a catalog service class so severity
+                // reflects what the service actually is.
+                var service = _segmentation.Services.ByPort(port).FirstOrDefault()
+                              ?? new ServiceClassDefinition
+                              {
+                                  Id       = proto,
+                                  Ports    = new List<int> { port },
+                                  Risk     = ServiceRisk.High,
+                                  Category = ServiceCategories.RemoteAdmin,
+                              };
+
+                var risk = ZonePairRisk.Assess(vantageZone, targetZone, service);
+
+                var isRdp     = proto.Equals("RDP", StringComparison.OrdinalIgnoreCase);
+                var checkName = isRdp ? "CROSS_ZONE_RDP" : "CROSS_ZONE_ADMIN_PORT";
+
+                var remediation = isRdp
+                    ? $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{port} at the boundary " +
+                      "firewall. Route RDP through a hardened jump host in the management zone " +
+                      "and gate it with Just-In-Time access."
+                    : $"Deny {vantageZone.Id} -> {targetZone.Id} on tcp/{port} ({service.Id}) at " +
+                      "the boundary firewall. Administrative protocols should originate only " +
+                      "from the management zone.";
+
+                findings.Add(MakeFinding(host,
+                    checkName, risk.Severity,
+                    $"{service.Id} (tcp/{port}) on '{host}' ({targetIp}) is reachable from zone " +
+                    $"'{vantageZone.DisplayName}' into zone '{targetZone.DisplayName}'. " +
+                    $"Scored {risk.Severity}: {risk.Rationale}.",
+                    $"VantageZone={vantageZone.Id} ({vantageIp}); " +
+                    $"TargetZone={targetZone.Id} ({targetIp}" +
+                    (matchedRange != null ? $" in {matchedRange}" : "") + "); " +
+                    $"Service={service.Id}; Port=tcp/{port}; " +
+                    $"TierDelta={vantageZone.Tier - targetZone.Tier}; RiskScore={risk.RawScore}",
+                    remediation,
+                    subject: $"{vantageZone.Id}->{targetZone.Id}|{service.Id}"));
+            }
+        }
+
+        private static async Task<IPAddress?> ResolveAsync(string host)
+        {
+            if (IPAddress.TryParse(host, out var literal)) return literal;
+
+            try
+            {
+                var addresses = await Dns.GetHostAddressesAsync(host);
+                return addresses.FirstOrDefault(
+                           a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                    ?? addresses.FirstOrDefault(
+                           a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // ── CHECK 2: Firewall state ───────────────────────────────────────────
@@ -235,20 +342,5 @@ namespace ZeroTrustAuditor.Checks
                 "Alternatively deploy a SIEM agent (Splunk UF, Elastic Agent, Sentinel MMA)."));
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────────
-
-        private static string? GetLocalOctet()
-        {
-            try
-            {
-                var host      = Dns.GetHostName();
-                var addresses = Dns.GetHostAddresses(host);
-                var ipv4 = addresses.FirstOrDefault(
-                    a => a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-                      && !IPAddress.IsLoopback(a));
-                return ipv4?.ToString().Split('.')[2];
-            }
-            catch { return null; }
-        }
     }
 }

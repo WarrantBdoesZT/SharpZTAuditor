@@ -439,13 +439,34 @@ The suite covers aggregation (deduplication identity, severity selection, correl
 
 ---
 
+## Zone-based segmentation
+
+Segment boundaries come from a declared zone map, not from IP address arithmetic.
+
+```powershell
+copy zones.example.json  zones.json     # describe your network
+copy policy.example.json policy.json    # declare approved cross-zone flows
+.\ZeroTrustAuditor.exe --hosts-file targets.txt --domain corp.local
+```
+
+| File | Purpose |
+|---|---|
+| `zones.json` | CIDR → zone, with a trust tier (0 = control plane … 4 = untrusted) and a role. Matched by **longest prefix**, so `10.30.1.0/24` (tier0) correctly wins over `10.0.0.0/8` (corporate). |
+| `policy.json` | The cross-zone flows that are **approved**. Default-deny; each allow carries an owner and an expiry. An expired rule stops authorising traffic and is reported as a stale exception. |
+| `services.json` | High-risk service catalog with intrinsic risk levels. OT/ICS protocols are marked `passive-only` and are never actively probed. |
+
+**Severity comes from the zone pair, not the port.** SMB from the management VLAN to an application server is the designed administration path and scores low. The identical SMB from a guest VLAN to a domain controller is Critical. Same port, same protocol, entirely different finding — each one reports the tier delta and the reasoning that produced its score.
+
+> **If `zones.json` is absent, cross-zone analysis is skipped**, and a `ZONE_MAP_NOT_CONFIGURED` finding says so. This is deliberate. The previous release inferred segments from the third octet of the IPv4 address, which treated `10.1.5.0/24` and `10.2.5.0/24` as the same segment while splitting a single `/23` in two. Producing no cross-zone findings is honest; producing confidently wrong ones is not.
+
+Configuration errors (invalid CIDR, duplicate zone id, a policy rule naming a zone that does not exist) **stop the run** rather than being skipped, because a typo in a policy rule silently turns an approved path into a reported violation.
+
 ## Known limitations
 
 Read these before treating a clean report as evidence of good segmentation. A full analysis and the planned redesign are in [REARCHITECTURE.md](REARCHITECTURE.md).
 
 | Limitation | What it means for your results |
 |---|---|
-| **Segment boundaries are inferred from the third IP octet** | `10.1.5.0/24` and `10.2.5.0/24` are treated as the *same* segment, so exposures between them are missed; a `/23` is treated as two segments, producing false positives. Subnet masks, VLANs, and routing are not consulted. IPv6-only hosts are never evaluated. |
 | **One vantage point** | Every probe originates from the machine running the exe. A result describes reachability *from that one segment* only — it is not a network-wide property, even though findings are presented per target host. |
 | **Closed and filtered are indistinguishable** | A TCP connect that fails is recorded the same way whether the firewall dropped it or the host is powered off. A "no findings" result therefore cannot distinguish a working control from a dead host. |
 | **No expected-policy baseline** | Every reachable admin port across a boundary is reported, including approved management paths. There is no allow-list, so triage is manual on every run. |

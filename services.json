@@ -1,0 +1,50 @@
+{
+  "_comment": "High-risk service catalog. Risk here is INTRINSIC to the service; final severity combines it with the zone pair being crossed (see ZonePairRisk). probePolicy 'passive-only' means the service is never actively connected to -- reserved for OT/ICS protocols where an unexpected TCP connect can fault a controller.",
+  "_version": "1.0.0",
+
+  "serviceClasses": [
+    { "id": "SMB",          "ports": [445, 139], "transport": "tcp", "risk": "Critical", "category": "remote-admin", "mitre": "T1021.002", "note": "Primary lateral movement and ransomware propagation path." },
+    { "id": "RPC_EPM",      "ports": [135],      "transport": "tcp", "risk": "Critical", "category": "remote-admin", "mitre": "T1021.003", "note": "Endpoint mapper; brokers DCOM/WMI on high dynamic ports 49152-65535." },
+    { "id": "RDP",          "ports": [3389],     "transport": "tcp", "risk": "Critical", "category": "remote-admin", "mitre": "T1021.001" },
+    { "id": "WINRM_HTTP",   "ports": [5985],     "transport": "tcp", "risk": "Critical", "category": "remote-admin", "mitre": "T1021.006" },
+    { "id": "WINRM_HTTPS",  "ports": [5986],     "transport": "tcp", "risk": "High",     "category": "remote-admin", "mitre": "T1021.006" },
+    { "id": "SSH",          "ports": [22],       "transport": "tcp", "risk": "High",     "category": "remote-admin", "mitre": "T1021.004" },
+    { "id": "VNC",          "ports": [5900, 5901, 5902], "transport": "tcp", "risk": "Critical", "category": "remote-admin", "mitre": "T1021.005", "note": "Frequently deployed with no authentication." },
+    { "id": "TEAMVIEWER",   "ports": [5938],     "transport": "tcp", "risk": "High",     "category": "remote-admin" },
+
+    { "id": "MSSQL",        "ports": [1433, 1434], "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "ORACLE",       "ports": [1521],       "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "MYSQL",        "ports": [3306],       "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "POSTGRES",     "ports": [5432],       "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "MONGODB",      "ports": [27017],      "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "REDIS",        "ports": [6379],       "transport": "tcp", "risk": "Critical", "category": "database", "note": "Unauthenticated by default; trivial RCE via config rewrite." },
+    { "id": "ELASTICSEARCH","ports": [9200, 9300], "transport": "tcp", "risk": "High",     "category": "database" },
+    { "id": "MEMCACHED",    "ports": [11211],      "transport": "tcp", "risk": "Critical", "category": "database", "note": "No authentication in default builds." },
+
+    { "id": "IPMI",         "ports": [623],   "transport": "udp", "risk": "Critical", "category": "oob-management", "note": "Cipher-zero auth bypass; a BMC is OS-independent, permanent host control." },
+    { "id": "ILO_IDRAC",    "ports": [17988, 17990], "transport": "tcp", "risk": "Critical", "category": "oob-management" },
+    { "id": "SNMP",         "ports": [161],   "transport": "udp", "risk": "High",     "category": "oob-management", "note": "Default community strings expose full device configuration." },
+    { "id": "ESXI",         "ports": [902, 903], "transport": "tcp", "risk": "Critical", "category": "hypervisor" },
+    { "id": "VCENTER",      "ports": [9443],  "transport": "tcp", "risk": "Critical", "category": "hypervisor" },
+    { "id": "PROXMOX",      "ports": [8006],  "transport": "tcp", "risk": "Critical", "category": "hypervisor" },
+
+    { "id": "TELNET",       "ports": [23],    "transport": "tcp", "risk": "Critical", "category": "cleartext-legacy" },
+    { "id": "FTP",          "ports": [21],    "transport": "tcp", "risk": "High",     "category": "cleartext-legacy" },
+    { "id": "TFTP",         "ports": [69],    "transport": "udp", "risk": "High",     "category": "cleartext-legacy" },
+    { "id": "RSERVICES",    "ports": [512, 513, 514], "transport": "tcp", "risk": "Critical", "category": "cleartext-legacy", "note": "rsh/rlogin/rexec: trust-based auth, no encryption." },
+
+    { "id": "NFS",          "ports": [2049],  "transport": "tcp", "risk": "High",     "category": "file-share" },
+    { "id": "LDAP_CLEAR",   "ports": [389],   "transport": "tcp", "risk": "High",     "category": "directory" },
+    { "id": "LDAPS",        "ports": [636],   "transport": "tcp", "risk": "Medium",   "category": "directory" },
+    { "id": "GLOBAL_CATALOG","ports": [3268, 3269], "transport": "tcp", "risk": "Medium", "category": "directory" },
+    { "id": "KERBEROS",     "ports": [88],    "transport": "tcp", "risk": "Medium",   "category": "directory" },
+    { "id": "DNS",          "ports": [53],    "transport": "tcp", "risk": "Low",      "category": "directory" },
+    { "id": "HTTPS",        "ports": [443],   "transport": "tcp", "risk": "Low",      "category": "remote-admin" },
+
+    { "id": "MODBUS",       "ports": [502],   "transport": "tcp", "risk": "Critical", "category": "ot-ics", "probePolicy": "passive-only", "note": "No authentication in the protocol. Never actively probe without written OT approval." },
+    { "id": "S7COMM",       "ports": [102],   "transport": "tcp", "risk": "Critical", "category": "ot-ics", "probePolicy": "passive-only" },
+    { "id": "DNP3",         "ports": [20000], "transport": "tcp", "risk": "Critical", "category": "ot-ics", "probePolicy": "passive-only" },
+    { "id": "ETHERNET_IP",  "ports": [44818], "transport": "tcp", "risk": "Critical", "category": "ot-ics", "probePolicy": "passive-only" },
+    { "id": "BACNET",       "ports": [47808], "transport": "udp", "risk": "High",     "category": "ot-ics", "probePolicy": "passive-only" }
+  ]
+}
