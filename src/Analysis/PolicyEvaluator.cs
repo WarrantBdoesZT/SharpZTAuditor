@@ -31,16 +31,23 @@ namespace ZeroTrustAuditor.Analysis
             string vantageHost,
             IPAddress? vantageIp)
         {
-            var vantageZone = _context.Zones.Resolve(vantageIp);
+            var defaultVantage = _context.Zones.Resolve(vantageIp);
 
             var findings  = new List<SegmentationFinding>();
             var exposures = new Dictionary<string, EndpointExposure>(StringComparer.OrdinalIgnoreCase);
-            var matrix    = BuildEmptyMatrix(vantageZone);
+            var matrix    = BuildEmptyMatrix(defaultVantage);
 
             foreach (var observation in observations)
             {
                 if (!IPAddress.TryParse(observation.TargetIp, out var targetIp))
                     continue;
+
+                // Each observation carries its own source zone, so a merged set from
+                // several vantage points populates several matrix rows rather than
+                // being flattened onto whichever host happened to run the analysis.
+                var vantageZone = string.IsNullOrEmpty(observation.VantageZoneId)
+                    ? defaultVantage
+                    : _context.Zones.ById(observation.VantageZoneId) ?? defaultVantage;
 
                 var targetKnown = _context.Zones.TryResolve(targetIp, out var targetZone);
                 var service     = ResolveService(observation);
@@ -66,11 +73,26 @@ namespace ZeroTrustAuditor.Analysis
                              observation.Verdict, status, sev, service);
             }
 
+            // Which source zones this analysis actually covers. With merged input
+            // there is more than one, and the report must not present itself as a
+            // single-vantage view when it is not.
+            var vantageZones = findings
+                .Select(f => f.VantageZoneId)
+                .Where(z => !string.IsNullOrEmpty(z))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(z => z, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (vantageZones.Count == 0) vantageZones.Add(defaultVantage.Id);
+
             var analysis = new SegmentationAnalysis
             {
                 VantageHost     = vantageHost,
                 VantageIp       = vantageIp?.ToString() ?? "unknown",
-                VantageZoneId   = vantageZone.Id,
+                VantageZoneId   = vantageZones.Count == 1
+                                    ? vantageZones[0]
+                                    : $"{vantageZones.Count} zones",
+                VantageZones    = vantageZones,
                 Findings        = findings,
                 Exposures       = exposures.Values
                                     .OrderByDescending(e => e.WorstSeverity)

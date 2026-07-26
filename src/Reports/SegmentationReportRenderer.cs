@@ -125,12 +125,20 @@ namespace ZeroTrustAuditor.Reports
 """);
             }
 
+            var zoneList = a.VantageZones.Count > 0
+                ? string.Join(", ", a.VantageZones)
+                : a.VantageZoneId;
+
+            var covered   = a.VantageZones.Count > 0 ? a.VantageZones.Count : 1;
+            var totalRows = Math.Max(covered, a.Matrix.Zones.Count);
+
             sb.AppendLine($"""
 <div class="callout info">
-  <strong>Coverage.</strong> This run measured reachability <em>from</em>
-  <code>{E(a.VantageZoneId)}</code> only. Every other row of the matrix is
-  <em>unassessed</em>, which is not the same as clean. Run from a host in each
-  source zone to fill the remaining rows.
+  <strong>Coverage.</strong> Reachability was measured <em>from</em>
+  <code>{E(zoneList)}</code> &mdash; {covered} of {totalRows} possible source zone(s).
+  The remaining rows of the matrix are <em>unassessed</em>, which is not the same
+  as clean. Run from a host in each source zone and combine the results with
+  <code>ZeroTrustAuditor merge</code> to fill them in.
 </div>
 """);
         }

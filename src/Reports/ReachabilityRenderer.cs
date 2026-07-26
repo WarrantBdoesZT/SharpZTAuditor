@@ -14,7 +14,7 @@ namespace ZeroTrustAuditor.Reports
     ///
     /// Findings only cover what is wrong. This file records every probe outcome
     /// including Filtered, which is the evidence that a boundary control WORKS.
-    /// It is also the input the Phase 3 zone matrix and run-over-run diffing read.
+    /// It is also the input to the merge command and to run-over-run comparison.
     /// </summary>
     public class ReachabilityRenderer
     {
@@ -28,37 +28,64 @@ namespace ZeroTrustAuditor.Reports
             IReadOnlyList<ReachabilityObservation> observations,
             ProbeStatistics? statistics,
             string vantageZoneId,
-            string path)
+            string path,
+            string vantageHost = "")
         {
-            var byVerdict = observations
-                .GroupBy(o => o.Verdict)
-                .ToDictionary(g => g.Key.ToString(), g => g.Count());
+            var document = Build(observations, statistics, vantageZoneId, vantageHost);
+            Write(document, path);
+        }
 
-            var document = new
-            {
-                GeneratedAt = DateTimeOffset.UtcNow,
-                // Recorded explicitly: an observation is only meaningful relative to
-                // where it was made from. Zone pairs not measured from this vantage
-                // are UNKNOWN, never "clean".
-                VantageZone = vantageZoneId,
-                Statistics = statistics == null ? null : new
-                {
-                    statistics.Planned,
-                    statistics.Sent,
-                    statistics.Skipped,
-                    statistics.Open,
-                    statistics.Closed,
-                    statistics.Filtered,
-                    statistics.Unknown,
-                },
-                VerdictSummary = byVerdict,
-                Observations   = observations,
-            };
-
+        /// <summary>Writes an already-assembled document, as produced by the merge command.</summary>
+        public void Write(ReachabilityDocument document, string path)
+        {
             File.WriteAllText(
                 path, JsonSerializer.Serialize(document, JsonOpts), ReportRenderer.Utf8NoBom);
 
-            Console.WriteLine($"[+] Reachability: {path} ({observations.Count} observation(s))");
+            Console.WriteLine(
+                $"[+] Reachability: {path} ({document.Observations.Count} observation(s))");
+        }
+
+        internal static ReachabilityDocument Build(
+            IReadOnlyList<ReachabilityObservation> observations,
+            ProbeStatistics? statistics,
+            string vantageZoneId,
+            string vantageHost)
+        {
+            return new ReachabilityDocument
+            {
+                GeneratedAt = DateTimeOffset.UtcNow,
+
+                // Recorded explicitly: an observation is only meaningful relative to
+                // where it was made from. Zone pairs not measured from this vantage
+                // are UNKNOWN, never "clean".
+                VantageZone  = vantageZoneId,
+                VantageHost  = vantageHost,
+                VantageZones = observations
+                    .Select(o => o.VantageZoneId)
+                    .Where(z => !string.IsNullOrEmpty(z))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .DefaultIfEmpty(vantageZoneId)
+                    .Where(z => !string.IsNullOrEmpty(z))
+                    .OrderBy(z => z, StringComparer.OrdinalIgnoreCase)
+                    .ToList(),
+
+                Statistics = statistics == null ? null : new ProbeStatisticsSnapshot
+                {
+                    Planned  = statistics.Planned,
+                    Sent     = statistics.Sent,
+                    Skipped  = statistics.Skipped,
+                    Open     = statistics.Open,
+                    Closed   = statistics.Closed,
+                    Filtered = statistics.Filtered,
+                    Unknown  = statistics.Unknown,
+                },
+
+                VerdictSummary = observations
+                    .GroupBy(o => o.Verdict.ToString())
+                    .ToDictionary(g => g.Key, g => g.Count()),
+
+                Observations = observations.ToList(),
+            };
         }
     }
 }

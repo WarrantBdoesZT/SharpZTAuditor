@@ -205,6 +205,16 @@ namespace ZeroTrustAuditor.Checks
             if (plan.Count == 0) return;
 
             var observations = await _probeEngine.ProbeAsync(plan);
+
+            // Stamp where the measurement was taken FROM. The probe engine has no
+            // zone map by design; without this the observation is unattributable and
+            // cannot fill a matrix row once merged with other runs.
+            foreach (var observation in observations)
+            {
+                observation.VantageZoneId = vantageZone.Id;
+                observation.VantageHost   = Environment.MachineName;
+            }
+
             Observations.AddRange(observations);
 
             foreach (var obs in observations)
