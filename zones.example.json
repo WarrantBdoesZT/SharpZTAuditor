@@ -1,0 +1,73 @@
+{
+  "_comment": "Copy to zones.json and describe YOUR network. Zones are matched by longest-prefix, so a specific carve-out (10.30.1.0/24 = tier0) correctly wins over the broad block that contains it (10.0.0.0/8).",
+  "_trustTiers": "0 = control plane (DCs, PAWs, OOB mgmt) | 1 = servers | 2 = perimeter/DMZ | 3 = user workstations | 4 = untrusted (guest, BYOD)",
+  "_roles": "user | server | tier0 | management | dmz | ot | untrusted",
+  "_version": "1.0.0",
+
+  "zones": [
+    {
+      "id": "tier0",
+      "name": "Domain Controllers and Privileged Access Workstations",
+      "cidrs": ["10.30.1.0/24"],
+      "trustTier": 0,
+      "role": "tier0",
+      "description": "Identity control plane. Nothing below tier 1 should reach this over an admin protocol."
+    },
+    {
+      "id": "mgmt",
+      "name": "Out-of-Band Management",
+      "cidrs": ["10.99.0.0/24", "192.168.99.0/24"],
+      "trustTier": 0,
+      "role": "management",
+      "description": "Jump hosts, BMC/iLO/iDRAC, switch management. Should ride a separate path from production traffic."
+    },
+    {
+      "id": "server-tier1",
+      "name": "Application and Database Servers",
+      "cidrs": ["10.20.0.0/16"],
+      "trustTier": 1,
+      "role": "server"
+    },
+    {
+      "id": "dmz",
+      "name": "DMZ",
+      "cidrs": ["192.168.200.0/24"],
+      "trustTier": 2,
+      "role": "dmz",
+      "description": "Internet-facing. Treat any inbound path from here to an internal zone as critical."
+    },
+    {
+      "id": "user-vlan",
+      "name": "Corporate Workstations",
+      "cidrs": ["10.10.0.0/16"],
+      "trustTier": 3,
+      "role": "user",
+      "description": "Workstation-to-workstation SMB/RDP has no legitimate business use in most estates and is the primary ransomware propagation path."
+    },
+    {
+      "id": "guest",
+      "name": "Guest and BYOD",
+      "cidrs": ["10.200.0.0/16"],
+      "trustTier": 4,
+      "role": "untrusted"
+    },
+    {
+      "id": "ot",
+      "name": "Plant Floor / ICS",
+      "cidrs": ["172.16.0.0/16"],
+      "trustTier": 1,
+      "role": "ot",
+      "safeMode": true,
+      "activeProbing": false,
+      "description": "SAFE MODE. Controllers can fault on unexpected TCP connects. Active probing requires both activeProbing=true here AND the --allow-ot-probing flag."
+    }
+  ],
+
+  "unclassifiedZone": {
+    "id": "unknown",
+    "name": "Unclassified",
+    "trustTier": 4,
+    "role": "untrusted",
+    "description": "Anything matching no CIDR above. A large unclassified population is itself a finding: NSA's Network and Environment pillar names data flow mapping as the capability segmentation depends on, and you cannot segment what you have not inventoried."
+  }
+}

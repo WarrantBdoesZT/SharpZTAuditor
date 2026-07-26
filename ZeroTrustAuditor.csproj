@@ -19,6 +19,16 @@
     <Compile Include="src\Models\Finding.cs" />
     <Compile Include="src\Models\AuditConfig.cs" />
     <Compile Include="src\Models\GraphModel.cs" />
+    <Compile Include="src\Models\Zone.cs" />
+    <Compile Include="src\Models\ServiceCatalog.cs" />
+    <Compile Include="src\Models\SegmentationPolicy.cs" />
+    <Compile Include="src\Models\SegmentationFinding.cs" />
+    <Compile Include="src\Models\StringOrArrayConverter.cs" />
+    <Compile Include="src\Network\IpRange.cs" />
+    <Compile Include="src\Network\ZoneResolver.cs" />
+    <Compile Include="src\Network\LocalAddressProvider.cs" />
+    <Compile Include="src\Network\ZonePairRisk.cs" />
+    <Compile Include="src\Config\SegmentationConfigLoader.cs" />
     <Compile Include="src\Checks\AdAuditor.cs" />
     <Compile Include="src\Checks\ProtocolProbe.cs" />
     <Compile Include="src\Checks\LateralPathAnalyzer.cs" />
@@ -32,9 +42,25 @@
     <Compile Include="src\Orchestrator.cs" />
   </ItemGroup>
 
+  <!-- The test project exercises loader/validation internals directly. -->
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ZeroTrustAuditor.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
   <!-- Copy config next to exe -->
   <ItemGroup>
     <Content Include="audit-config.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="services.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="zones.example.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="policy.example.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

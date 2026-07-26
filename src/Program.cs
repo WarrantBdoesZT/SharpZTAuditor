@@ -51,7 +51,28 @@ namespace ZeroTrustAuditor
                 Console.WriteLine($"[*] Skipping modules (--skip-modules): {string.Join(", ", opts.SkipModules)}");
             }
 
-            var orchestrator = new Orchestrator(config);
+            // ── Segmentation context: zones, policy, service catalog ──────────
+            var segmentation = ZeroTrustAuditor.Config.SegmentationConfigLoader.Load(
+                opts.ZonesPath, opts.PolicyPath, opts.ServicesPath);
+
+            segmentation.Validation.PrintTo(Console.Out, Console.Error);
+
+            if (segmentation.Validation.HasErrors)
+            {
+                Console.Error.WriteLine(
+                    "\n[!] Segmentation configuration has errors (listed above). " +
+                    "Fix them and re-run -- proceeding would silently mis-attribute zones.");
+                return 4;
+            }
+
+            if (segmentation.IsConfigured)
+                Console.WriteLine(
+                    $"[*] Zone map: {segmentation.Zones.Zones.Count} zone(s), " +
+                    $"{segmentation.Zones.RangeCount} CIDR range(s); " +
+                    $"policy rules: {segmentation.Policy.Rules.Count}; " +
+                    $"service classes: {segmentation.Services.ServiceClasses.Count}");
+
+            var orchestrator = new Orchestrator(config, segmentation);
             var renderer     = new ReportRenderer();
             var siem         = new SiemRenderer(config);
 
@@ -178,6 +199,12 @@ namespace ZeroTrustAuditor
                 "             Valid names: AdAuditor, ProtocolProbe,\n" +
                 "             LateralPathAnalyzer, ShareAuditor, SegmentationChecker\n" +
                 "  --no-graph Skip lateral movement graph generation\n" +
+                "\nSegmentation:\n" +
+                "  --zones    zones.json         Zone map (CIDR -> zone, trust tier, role).\n" +
+                "             Required for cross-zone analysis; without it those\n" +
+                "             checks are SKIPPED rather than guessed at.\n" +
+                "  --policy   policy.json        Approved cross-zone flows (default-deny).\n" +
+                "  --services services.json      High-risk service catalog.\n" +
                 "  --help, -h Show this help text");
         }
 
@@ -189,7 +216,10 @@ namespace ZeroTrustAuditor
             string    OutputDir,
             string?   ConfigPath,
             string[]  SkipModules,
-            bool      NoGraph);
+            bool      NoGraph,
+            string?   ZonesPath,
+            string?   PolicyPath,
+            string?   ServicesPath);
 
         static Options? ParseArgs(string[] args)
         {
@@ -200,6 +230,9 @@ namespace ZeroTrustAuditor
             string? configPath   = null;
             string? skipModules  = null;
             bool    noGraph      = false;
+            string? zonesPath    = null;
+            string? policyPath   = null;
+            string? servicesPath = null;
 
             // Fix: use args.Length (not args.Length - 1) so the last flag is never skipped.
             // Each value flag consumes args[i] (the flag) and args[++i] (the value),
@@ -220,6 +253,12 @@ namespace ZeroTrustAuditor
                         if (i + 1 < args.Length) configPath  = args[++i]; break;
                     case "--skip-modules":
                         if (i + 1 < args.Length) skipModules = args[++i]; break;
+                    case "--zones":
+                        if (i + 1 < args.Length) zonesPath    = args[++i]; break;
+                    case "--policy":
+                        if (i + 1 < args.Length) policyPath   = args[++i]; break;
+                    case "--services":
+                        if (i + 1 < args.Length) servicesPath = args[++i]; break;
                     case "--no-graph":
                         noGraph = true; break;
                 }
@@ -285,7 +324,8 @@ namespace ZeroTrustAuditor
                     StringSplitOptions.RemoveEmptyEntries |
                     StringSplitOptions.TrimEntries);
 
-            return new Options(hosts, domain, outputDir, configPath, skipList, noGraph);
+            return new Options(hosts, domain, outputDir, configPath, skipList, noGraph,
+                               zonesPath, policyPath, servicesPath);
         }
 
         static void PrintBanner()

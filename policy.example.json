@@ -1,0 +1,57 @@
+{
+  "_comment": "Copy to policy.json. Declares the cross-zone flows that are APPROVED. Everything else is a violation. Without this file every legitimate administration path is reported as a finding, so triage stays manual forever.",
+  "_matching": "The most specific matching rule wins ('*' is a wildcard). Among equally specific matches, deny beats allow so an ambiguous policy fails closed. An EXPIRED allow rule does not authorise traffic -- it is reported as an expired exception.",
+  "_version": "1.0.0",
+
+  "defaultAction": "deny",
+
+  "rules": [
+    {
+      "id": "mgmt-admin-path",
+      "from": "mgmt",
+      "to": ["server-tier1", "tier0"],
+      "services": ["WINRM_HTTPS", "RDP", "SSH"],
+      "action": "allow",
+      "justification": "Jump-host administration. All privileged access is expected to originate here.",
+      "owner": "infrastructure@example.com",
+      "reviewedOn": "2026-03-01",
+      "expiresOn": "2026-09-01"
+    },
+    {
+      "id": "domain-membership",
+      "from": ["server-tier1", "user-vlan"],
+      "to": "tier0",
+      "services": ["KERBEROS", "LDAPS", "DNS", "GLOBAL_CATALOG"],
+      "action": "allow",
+      "justification": "Domain join, authentication and directory lookup.",
+      "owner": "identity@example.com",
+      "reviewedOn": "2026-03-01"
+    },
+    {
+      "id": "user-app-access",
+      "from": "user-vlan",
+      "to": "server-tier1",
+      "services": ["HTTPS"],
+      "action": "allow",
+      "justification": "Normal application access over TLS only.",
+      "owner": "appteam@example.com",
+      "reviewedOn": "2026-03-01"
+    },
+    {
+      "id": "no-guest-internal",
+      "from": "guest",
+      "to": "*",
+      "services": ["*"],
+      "action": "deny",
+      "justification": "Guest network is internet-only. Explicit deny so this can never be widened by a broader allow."
+    },
+    {
+      "id": "it-ot-boundary",
+      "from": ["user-vlan", "server-tier1", "dmz", "guest"],
+      "to": "ot",
+      "services": ["*"],
+      "action": "deny",
+      "justification": "IT/OT separation. CISA/NSA AA23-278A calls out that lack of segmentation between IT and OT places OT environments at risk. Traffic must traverse a documented DMZ/conduit."
+    }
+  ]
+}
