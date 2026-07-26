@@ -128,7 +128,7 @@ namespace ZeroTrustAuditor.Reports
                     ? f.Description[..80] : f.Description;
 
                 lines.Add($"{now} ZeroTrustAuditor " +
-                          $"CEF:0|Anthropic|ZeroTrustAuditor|2.0.0|" +
+                          $"CEF:0|{ToolInfo.Vendor}|{ToolInfo.Name}|{ToolInfo.Version}|" +
                           $"{Esc(f.CheckName)}|{Esc(desc)}|{cefSev}|{ext}");
             }
 

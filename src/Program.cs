@@ -9,7 +9,7 @@ using ZeroTrustAuditor.Reports;
 namespace ZeroTrustAuditor
 {
     /// <summary>
-    /// ZeroTrustAuditor v2.0 -- Pure C# Zero Trust misconfiguration assessment.
+    /// ZeroTrustAuditor v3.0 -- Internal network segmentation assessment.
     ///
     /// Usage:
     ///   ZeroTrustAuditor.exe --hosts host1,host2 --domain corp.local
@@ -473,7 +473,7 @@ namespace ZeroTrustAuditor
         {
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine(
-                "  ZeroTrustAuditor v2.0 | Pure C# Zero Trust Assessment\n" +
+                $"  {Models.ToolInfo.Name} v{Models.ToolInfo.ShortVersion} | {Models.ToolInfo.Tagline}\n" +
                 "  No PowerShell. No WMI. No external processes.\n");
             Console.ResetColor();
         }

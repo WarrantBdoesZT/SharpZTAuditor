@@ -8,8 +8,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
-    <Version>2.0.0</Version>
-    <Description>Zero Trust misconfiguration assessment tool - pure C# edition</Description>
+    <Version>3.0.0</Version>
+    <Description>Internal network segmentation assessment from an assumed-breach posture</Description>
     <Platforms>x64</Platforms>
   </PropertyGroup>
 
@@ -18,6 +18,7 @@
     <Compile Include="src\Program.cs" />
     <Compile Include="src\Models\Finding.cs" />
     <Compile Include="src\Models\AuditConfig.cs" />
+    <Compile Include="src\Models\ToolInfo.cs" />
     <Compile Include="src\Models\GraphModel.cs" />
     <Compile Include="src\Models\Zone.cs" />
     <Compile Include="src\Models\ServiceCatalog.cs" />

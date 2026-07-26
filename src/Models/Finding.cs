@@ -71,6 +71,6 @@ namespace ZeroTrustAuditor.Models
         public string Domain { get; set; } = string.Empty;
         public List<Finding> Findings { get; set; } = new();
         public Dictionary<Severity, int> SeveritySummary { get; set; } = new();
-        public string AuditorVersion { get; set; } = "2.0.0";
+        public string AuditorVersion { get; set; } = ToolInfo.Version;
     }
 }
