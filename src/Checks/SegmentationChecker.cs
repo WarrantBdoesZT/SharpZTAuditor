@@ -66,10 +66,29 @@ namespace ZeroTrustAuditor.Checks
             catch { }
 
             // ── CHECK 1: Cross-segment admin port exposure ────────────────────
+            // The protocol list now comes from config.network.crossSegmentAdminPorts.
+            // It was previously hardcoded, so customising that config key did nothing.
+            var watched = new HashSet<string>(
+                Config.Network.CrossSegmentAdminPorts, StringComparer.OrdinalIgnoreCase);
+
             foreach (var proto in open.Keys.Where(k => open[k]))
             {
-                if (crossSegment &&
-                    new[] { "SMB", "WMI", "WinRM" }.Contains(proto))
+                if (!crossSegment || !watched.Contains(proto)) continue;
+
+                if (proto.Equals("RDP", StringComparison.OrdinalIgnoreCase))
+                {
+                    findings.Add(MakeFinding(host,
+                        "CROSS_SEGMENT_RDP", Severity.High,
+                        $"RDP (port {ports[proto]}) is reachable on '{host}' ({targetIP ?? "unknown"}) " +
+                        "across network segments. Direct RDP from user networks to server segments " +
+                        "bypasses jump server controls.",
+                        $"Target={host} ({targetIP}); Protocol=RDP; CrossSegment=True",
+                        "Block RDP at the network boundary. " +
+                        "Require all RDP sessions to route through a hardened jump server. " +
+                        "Implement Just-In-Time RDP access via a PAM solution.",
+                        subject: proto));
+                }
+                else
                 {
                     findings.Add(MakeFinding(host,
                         "CROSS_SEGMENT_ADMIN_PORT", Severity.High,
@@ -78,20 +97,10 @@ namespace ZeroTrustAuditor.Checks
                         "This enables lateral movement across segment boundaries.",
                         $"Target={host} ({targetIP}); Protocol={proto}; AuditOctet={auditOctet}; TargetOctet={targetOctet}",
                         "Block SMB (445), WinRM (5985/5986), WMI (135) between user and server " +
-                        "VLANs at the firewall level. Use jump servers for cross-segment admin access."));
-                }
-
-                if (crossSegment && proto == "RDP")
-                {
-                    findings.Add(MakeFinding(host,
-                        "CROSS_SEGMENT_RDP", Severity.High,
-                        $"RDP (port 3389) is reachable on '{host}' ({targetIP ?? "unknown"}) " +
-                        "across network segments. Direct RDP from user networks to server segments " +
-                        "bypasses jump server controls.",
-                        $"Target={host} ({targetIP}); Protocol=RDP; CrossSegment=True",
-                        "Block RDP at the network boundary. " +
-                        "Require all RDP sessions to route through a hardened jump server. " +
-                        "Implement Just-In-Time RDP access via a PAM solution."));
+                        "VLANs at the firewall level. Use jump servers for cross-segment admin access.",
+                        // Subject = protocol. Without it, SMB/WMI/WinRM all share
+                        // Host+CheckName and deduplication keeps only ONE of them.
+                        subject: proto));
                 }
             }
 
@@ -136,21 +145,32 @@ namespace ZeroTrustAuditor.Checks
                         $"Profile={profileName}; EnableFirewall=0; " +
                         $"Key=HKLM\\{regKey}\\EnableFirewall",
                         "Re-enable Windows Firewall for all profiles via GPO. " +
-                        "Never disable host firewall -- use explicit inbound rules instead."));
+                        "Never disable host firewall -- use explicit inbound rules instead.",
+                        // Subject = profile. All three profiles previously shared
+                        // Host+CheckName, so deduplication reported only one of them.
+                        subject: profileName));
                 }
 
-                // Check log settings
-                var logDropped = GetRemoteRegInt(host, regKey + "\\Logging", "LogDroppedPackets");
-                if (logDropped == null || logDropped == 0)
+                // Check log settings. Only report when we positively established that
+                // logging is off -- an unreadable value used to be reported as disabled,
+                // fabricating a Medium finding per profile per unreachable host.
+                var logStatus = TryGetRemoteRegInt(
+                    host, regKey + "\\Logging", "LogDroppedPackets", out var logDropped);
+
+                if (logStatus == RegistryReadStatus.Unreadable) continue;
+
+                if (logStatus == RegistryReadStatus.Absent || logDropped == 0)
                 {
                     findings.Add(MakeFinding(host,
                         "FIREWALL_LOGGING_DISABLED", Severity.Medium,
                         $"Windows Firewall '{profileName}' profile on '{host}' does not log dropped packets. " +
                         "Lateral movement attempts and port scans are invisible to the SOC.",
-                        $"Profile={profileName}; LogDroppedPackets={logDropped ?? 0}",
+                        $"Profile={profileName}; LogDroppedPackets=" +
+                        (logStatus == RegistryReadStatus.Absent ? "<not set>" : logDropped.ToString()),
                         "Enable firewall drop logging via GPO or Set-NetFirewallProfile. " +
                         "Forward logs to SIEM via Windows Event Forwarding. " +
-                        "Set log file size to at least 32768 KB."));
+                        "Set log file size to at least 32768 KB.",
+                        subject: profileName));
                 }
             }
         }
@@ -189,11 +209,19 @@ namespace ZeroTrustAuditor.Checks
         private void CheckWefConfig(string host, List<Finding> findings)
         {
             // WEF subscription manager key presence indicates forwarding is configured
-            var subManager = GetRemoteReg(host,
+            var status = TryGetRemoteReg(host,
                 @"SOFTWARE\Policies\Microsoft\Windows\EventLog\EventForwarding\SubscriptionManager",
-                "1");
+                "1", out _);
 
-            if (subManager != null) return; // WEF is configured
+            if (status == RegistryReadStatus.Read) return; // WEF is configured
+
+            // Could not query the host at all -- "not configured" is not a conclusion
+            // we are entitled to draw, and asserting it fabricates a finding per host.
+            if (status == RegistryReadStatus.Unreadable)
+            {
+                Log($"  {host} WEF state undetermined (registry unreadable) -- not reporting.");
+                return;
+            }
 
             findings.Add(MakeFinding(host,
                 "WEF_NOT_CONFIGURED", Severity.Medium,

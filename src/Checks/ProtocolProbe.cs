@@ -175,12 +175,23 @@ namespace ZeroTrustAuditor.Checks
         {
             if (!open.GetValueOrDefault("WMI")) return;
 
-            var launchPerm = GetRemoteReg(host,
-                @"SOFTWARE\Microsoft\Ole", "DefaultLaunchPermission");
-            var accessPerm = GetRemoteReg(host,
-                @"SOFTWARE\Microsoft\Ole", "DefaultAccessPermission");
+            // Tri-state: these checks report the ABSENCE of a value as a finding, so an
+            // unreadable registry must not be treated as absence. Previously a host with
+            // Remote Registry stopped produced a High plus a Medium DCOM finding purely
+            // because both reads returned null.
+            var launchStatus = TryGetRemoteReg(host,
+                @"SOFTWARE\Microsoft\Ole", "DefaultLaunchPermission", out _);
+            var accessStatus = TryGetRemoteReg(host,
+                @"SOFTWARE\Microsoft\Ole", "DefaultAccessPermission", out _);
 
-            if (launchPerm == null)
+            if (launchStatus == RegistryReadStatus.Unreadable ||
+                accessStatus == RegistryReadStatus.Unreadable)
+            {
+                Log($"  {host} DCOM permissions undetermined (registry unreadable) -- not reporting.");
+                return;
+            }
+
+            if (launchStatus == RegistryReadStatus.Absent)
             {
                 findings.Add(MakeFinding(host, "DCOM_DEFAULT_LAUNCH_PERMISSION", Severity.High,
                     $"DCOM DefaultLaunchPermission is absent on '{host}'. " +
@@ -190,7 +201,7 @@ namespace ZeroTrustAuditor.Checks
                     "Administrators and SYSTEM only via dcomcnfg.exe or Group Policy."));
             }
 
-            if (accessPerm == null)
+            if (accessStatus == RegistryReadStatus.Absent)
             {
                 findings.Add(MakeFinding(host, "DCOM_DEFAULT_ACCESS_PERMISSION", Severity.Medium,
                     $"DCOM DefaultAccessPermission is absent on '{host}'. " +

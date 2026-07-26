@@ -94,11 +94,18 @@ namespace ZeroTrustAuditor
             var report = Aggregate(allFindings, scopedHosts, domain);
 
             Console.WriteLine($"[+] Audit complete. Unique findings: {report.Findings.Count}");
-            foreach (var (sev, count) in report.SeveritySummary.Where(kv => kv.Value > 0))
-                Console.WriteLine($"    {sev,-15} {count}");
+            foreach (var sev in SeverityDescending)
+                if (report.SeveritySummary.TryGetValue(sev, out var count) && count > 0)
+                    Console.WriteLine($"    {sev,-15} {count}");
 
             return report;
         }
+
+        private static readonly Severity[] SeverityDescending =
+        {
+            Severity.Critical, Severity.High, Severity.Medium,
+            Severity.Low, Severity.Informational
+        };
 
         private static async Task<List<Finding>> RunSafe(
             string name, Func<Task<List<Finding>>> fn, CancellationToken ct)
@@ -106,7 +113,27 @@ namespace ZeroTrustAuditor
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = await fn();
+                var work = fn();
+
+                // The check modules call blocking LDAP / registry / SMB APIs that expose
+                // no cancellation of their own, so a module that overruns is ABANDONED
+                // rather than awaited forever. Previously `ct` was accepted here and never
+                // observed, which made config.audit.parallelModuleTimeout dead config: a
+                // single hung module hung the whole run indefinitely.
+                var completed = await Task.WhenAny(
+                    work, Task.Delay(Timeout.InfiniteTimeSpan, ct));
+
+                if (completed != work)
+                {
+                    sw.Stop();
+                    Console.Error.WriteLine(
+                        $"[!] {name} timed out or was cancelled after {sw.Elapsed.TotalSeconds:F1}s " +
+                        "-- its partial results are discarded. Raise config.audit.parallelModuleTimeout " +
+                        "or narrow the host scope.");
+                    return new List<Finding>();
+                }
+
+                var result = await work;
                 sw.Stop();
                 Console.WriteLine($"[✓] {name} complete: {result.Count} finding(s) ({sw.Elapsed.TotalSeconds:F1}s)");
                 return result;
@@ -216,16 +243,32 @@ namespace ZeroTrustAuditor
             catch { return false; }
         }
 
-        private AuditReport Aggregate(List<Finding> all, string[] hosts, string domain)
+        /// <summary>
+        /// Deduplicate, score, and correlate. Public so it can be unit tested without
+        /// touching a network -- this is where the three worst historical bugs lived.
+        /// </summary>
+        public AuditReport Aggregate(List<Finding> all, string[] hosts, string domain)
         {
             // Apply check exclusions
             var excluded = _config.Audit.ExcludeChecks
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             var eligible = all.Where(f => !excluded.Contains(f.CheckName)).ToList();
 
-            // Deduplicate: same Host + CheckName, keep highest severity
+            // Deduplicate on the identity of the thing being reported.
+            //
+            // Subject is part of the key because every AdAuditor finding, the SYSVOL
+            // check, and the local-admin-overlap check all stamp Host with the DOMAIN
+            // name. Keying on Host+CheckName alone collapsed every Kerberoastable
+            // account in the domain into one finding (likewise all three firewall
+            // profiles per host, and every cross-segment protocol per target).
+            //
+            // OrderByDescending(Severity) now genuinely keeps the MOST severe member:
+            // the Severity enum is ordered ascending with pinned values. It used to be
+            // declared Critical=0..Informational=4, so this same expression kept the
+            // LEAST severe member -- discarding the Critical duplicates.
             var deduped = eligible
-                .GroupBy(f => $"{f.Host}|{f.CheckName}")
+                .GroupBy(f => $"{f.Host}|{f.CheckName}|{f.Subject}",
+                         StringComparer.OrdinalIgnoreCase)
                 .Select(g => g.OrderByDescending(f => f.Severity).First())
                 .ToList();
 
@@ -233,36 +276,8 @@ namespace ZeroTrustAuditor
             foreach (var f in deduped)
                 f.RiskScore = _config.Severity.GetBaseScore(f.Severity);
 
-            // Cross-correlation boosts
             if (_config.Correlation.Enabled)
-            {
-                var byHost = deduped.GroupBy(f => f.Host)
-                    .ToDictionary(g => g.Key, g => g.ToList());
-
-                foreach (var hostFindings in byHost.Values)
-                {
-                    var checks = hostFindings.Select(f => f.CheckName).ToHashSet();
-
-                    foreach (var rule in _config.Correlation.Rules)
-                    {
-                        if (!checks.Contains(rule.CheckA) || !checks.Contains(rule.CheckB))
-                            continue;
-
-                        var fa = hostFindings.First(f => f.CheckName == rule.CheckA);
-                        var fb = hostFindings.First(f => f.CheckName == rule.CheckB);
-
-                        fa.RiskScore = Math.Min(_config.Severity.MaxScore,
-                            fa.RiskScore + rule.RiskBoost);
-                        fb.RiskScore = Math.Min(_config.Severity.MaxScore,
-                            fb.RiskScore + rule.RiskBoost);
-
-                        if (!fa.RelatedFindingIds.Contains(fb.Id)) fa.RelatedFindingIds.Add(fb.Id);
-                        if (!fb.RelatedFindingIds.Contains(fa.Id)) fb.RelatedFindingIds.Add(fa.Id);
-                        fa.Tags["correlationRule"] = rule.Name;
-                        fb.Tags["correlationRule"] = rule.Name;
-                    }
-                }
-            }
+                ApplyCorrelation(deduped);
 
             var summary = new Dictionary<Severity, int>();
             foreach (Severity s in Enum.GetValues(typeof(Severity)))
@@ -272,9 +287,97 @@ namespace ZeroTrustAuditor
             {
                 TargetHosts     = hosts,
                 Domain          = domain,
-                Findings        = deduped.OrderByDescending(f => f.RiskScore).ToList(),
+                Findings        = deduped
+                    .OrderByDescending(f => f.RiskScore)
+                    .ThenByDescending(f => f.Severity)
+                    .ToList(),
                 SeveritySummary = summary,
             };
+        }
+
+        // ── Correlation ────────────────────────────────────────────────────────
+        //
+        // Previously this grouped findings by Host and required both sides of a rule
+        // to appear in the same group. Because domain-wide checks anchor on the domain
+        // name while per-host checks anchor on a hostname, four of the six shipped
+        // rules could never match, and the two that could were vacuous -- they fired
+        // whenever both conditions existed anywhere in the domain.
+        //
+        // Now a finding "touches" its own Host plus everything in AffectedHosts, so
+        // LOCAL_ADMIN_OVERLAP correlates with the specific hosts it actually spans.
+        // Rules that are genuinely domain-wide declare scope:"domain" and are tagged
+        // as such, so nobody mistakes them for a same-host attack chain.
+
+        private void ApplyCorrelation(List<Finding> findings)
+        {
+            var byCheck = findings
+                .GroupBy(f => f.CheckName, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            // A finding is boosted at most once per rule, however many partners it has.
+            var boosted = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var rule in _config.Correlation.Rules)
+            {
+                if (string.IsNullOrWhiteSpace(rule.CheckA) ||
+                    string.IsNullOrWhiteSpace(rule.CheckB)) continue;
+
+                if (!byCheck.TryGetValue(rule.CheckA, out var aSide)) continue;
+                if (!byCheck.TryGetValue(rule.CheckB, out var bSide)) continue;
+
+                foreach (var fa in aSide)
+                foreach (var fb in bSide)
+                {
+                    if (ReferenceEquals(fa, fb)) continue;
+                    if (rule.IsHostScoped && !SharesHost(fa, fb)) continue;
+
+                    Boost(fa, rule, boosted);
+                    Boost(fb, rule, boosted);
+
+                    if (!fa.RelatedFindingIds.Contains(fb.Id)) fa.RelatedFindingIds.Add(fb.Id);
+                    if (!fb.RelatedFindingIds.Contains(fa.Id)) fb.RelatedFindingIds.Add(fa.Id);
+
+                    TagRule(fa, rule);
+                    TagRule(fb, rule);
+                }
+            }
+        }
+
+        private void Boost(Finding f, CorrelationRule rule, HashSet<string> boosted)
+        {
+            if (!boosted.Add($"{f.Id}|{rule.Name}")) return;
+            f.RiskScore = Math.Min(_config.Severity.MaxScore, f.RiskScore + rule.RiskBoost);
+        }
+
+        private static void TagRule(Finding f, CorrelationRule rule)
+        {
+            if (f.Tags.TryGetValue("correlationRule", out var existing) && existing.Length > 0)
+            {
+                if (!existing.Split(';').Select(s => s.Trim()).Contains(rule.Name))
+                    f.Tags["correlationRule"] = existing + "; " + rule.Name;
+            }
+            else
+            {
+                f.Tags["correlationRule"] = rule.Name;
+            }
+
+            f.Tags["correlationScope"] = rule.IsHostScoped ? "host" : "domain";
+        }
+
+        /// <summary>Every host a finding touches: its anchor host plus any AffectedHosts.</summary>
+        private static IEnumerable<string> TouchedHosts(Finding f)
+        {
+            if (!string.IsNullOrEmpty(f.Host)) yield return f.Host;
+            foreach (var h in f.AffectedHosts)
+                if (!string.IsNullOrEmpty(h)) yield return h;
+        }
+
+        private static bool SharesHost(Finding a, Finding b)
+        {
+            var lhs = new HashSet<string>(TouchedHosts(a), StringComparer.OrdinalIgnoreCase);
+            foreach (var h in TouchedHosts(b))
+                if (lhs.Contains(h)) return true;
+            return false;
         }
     }
 }

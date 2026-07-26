@@ -75,7 +75,8 @@ namespace ZeroTrustAuditor.Checks
                     (isAdmin ? " AdminCount=1 - critical privilege escalation path." : ""),
                     $"SamAccountName={sam}; SPNs={string.Join("; ", spns)}; AdminCount={GetInt(result, "adminCount")}",
                     "Use Group Managed Service Accounts (gMSA). If a standard account is required, " +
-                    "use a 127+ character random password and audit SPN registrations."));
+                    "use a 127+ character random password and audit SPN registrations.",
+                    subject: sam));
             }
         }
 
@@ -101,7 +102,8 @@ namespace ZeroTrustAuditor.Checks
                     "AS-REP hashes can be requested anonymously and cracked offline.",
                     $"SamAccountName={sam}; AdminCount={GetInt(result, "adminCount")}",
                     "Enable Kerberos pre-authentication on all accounts unless a legacy application " +
-                    "explicitly requires otherwise."));
+                    "explicitly requires otherwise.",
+                    subject: sam));
             }
         }
 
@@ -130,7 +132,8 @@ namespace ZeroTrustAuditor.Checks
                     $"SamAccountName={sam}; DN={dn}",
                     "Migrate to Constrained Delegation or RBCD. " +
                     "Remove TrustedForDelegation from all non-DC accounts. " +
-                    "Add sensitive accounts to the Protected Users group."));
+                    "Add sensitive accounts to the Protected Users group.",
+                    subject: sam));
             }
         }
 
@@ -175,7 +178,8 @@ namespace ZeroTrustAuditor.Checks
                     "This enables offline extraction of all password hashes without touching a DC.",
                     $"Principal={principal}; RightGUID={guidStr}; AccessType=Allow",
                     "Remove DS-Replication-Get-Changes-All ACEs from all non-DC principals. " +
-                    "Use repadmin /showattr to enumerate delegated replication rights."));
+                    "Use repadmin /showattr to enumerate delegated replication rights.",
+                    subject: $"{principal}|{guidStr}"));
             }
         }
 
@@ -204,7 +208,8 @@ namespace ZeroTrustAuditor.Checks
                         "TGT lifetime is unrestricted and NTLM/Digest auth is not blocked.",
                         $"SamAccountName={sam}; Group={groupName}; Enabled={enabled}",
                         "Add all tier-0 and tier-1 privileged accounts to Protected Users. " +
-                        "Test compatibility -- Protected Users blocks NTLM, DES, RC4, and unconstrained delegation."));
+                        "Test compatibility -- Protected Users blocks NTLM, DES, RC4, and unconstrained delegation.",
+                        subject: $"{groupName}\\{sam}"));
                 }
             }
         }
@@ -249,7 +254,8 @@ namespace ZeroTrustAuditor.Checks
                             $"for {_staleThreshold}+ days but remains enabled with elevated rights.",
                             $"SamAccountName={sam}; Group={groupName}; LastLogon={lastLogon:yyyy-MM-dd}",
                             "Disable or remove stale privileged accounts. Implement JIT access provisioning. " +
-                            "Accounts unused 60 days = review; 90 days = disable; 180 days = delete."));
+                            "Accounts unused 60 days = review; 90 days = disable; 180 days = delete.",
+                            subject: $"{groupName}\\{sam}"));
                     }
                     catch { continue; }
                 }
@@ -283,7 +289,8 @@ namespace ZeroTrustAuditor.Checks
                     "All its members inherit Domain Admin rights -- this may be broader than intended.",
                     $"NestedGroup={groupName}; DN={memberDn}",
                     "Remove nested groups from Domain Admins. " +
-                    "Only named individual accounts should be direct members."));
+                    "Only named individual accounts should be direct members.",
+                    subject: groupName));
             }
         }
 
@@ -318,7 +325,8 @@ namespace ZeroTrustAuditor.Checks
                     "This disables DACL inheritance, potentially hiding delegated permissions.",
                     $"SamAccountName={sam}; AdminCount=1",
                     "Reset AdminCount to 0 and re-enable DACL inheritance on accounts " +
-                    "not currently in protected groups."));
+                    "not currently in protected groups.",
+                    subject: sam));
             }
         }
 

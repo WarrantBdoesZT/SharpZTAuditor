@@ -173,14 +173,18 @@ WHY: An attacker intercepts SMB auth → relays it to any host
 
 **All six correlation rules:**
 
-| Rule | Check A | Check B | Why dangerous together |
-|---|---|---|---|
-| SMB relay + admin spread | `SMB_SIGNING_DISABLED` | `LOCAL_ADMIN_OVERLAP` | One relayed auth = access to every host the account admins |
-| NTLMv1 + admin spread | `NTLM_V1_ENABLED` | `LOCAL_ADMIN_OVERLAP` | NTLMv1 cracks in seconds; shared admin = mass compromise |
-| Delegation + Kerberoasting | `UNCONSTRAINED_DELEGATION` | `KERBEROASTABLE_SPN` | Crack the SPN → present ticket to delegating host → impersonate anyone |
-| DCSync + stale account | `DCSYNC_ACE` | `STALE_PRIVILEGED_ACCOUNT` | Dormant account with replication rights — low detection, maximum blast radius |
-| Unencrypted WinRM + admin spread | `WINRM_UNENCRYPTED` | `LOCAL_ADMIN_OVERLAP` | Credentials on the wire + shared admin password = immediate mass access |
-| RDP NLA disabled + open share | `RDP_NLA_DISABLED` | `OPEN_SMB_SHARE_WRITE` | Pre-auth bruteforce + writable share = remote exec + persistence |
+| Rule | Check A | Check B | Scope | Why dangerous together |
+|---|---|---|---|---|
+| SMB relay + admin spread | `SMB_SIGNING_DISABLED` | `LOCAL_ADMIN_OVERLAP` | host | One relayed auth = access to every host the account admins |
+| NTLMv1 + admin spread | `NTLM_V1_ENABLED` | `LOCAL_ADMIN_OVERLAP` | host | NTLMv1 cracks in seconds; shared admin = mass compromise |
+| Delegation + Kerberoasting | `UNCONSTRAINED_DELEGATION` | `KERBEROASTABLE_SPN` | domain | Crack the SPN → present ticket to delegating host → impersonate anyone |
+| DCSync + stale account | `DCSYNC_ACE` | `STALE_PRIVILEGED_ACCOUNT` | domain | Dormant account with replication rights — low detection, maximum blast radius |
+| Unencrypted WinRM + admin spread | `WINRM_UNENCRYPTED` | `LOCAL_ADMIN_OVERLAP` | host | Credentials on the wire + shared admin password = immediate mass access |
+| RDP NLA disabled + writable share | `RDP_NLA_DISABLED` | `OPEN_SMB_SHARE_WRITE` | host | Pre-auth bruteforce + writable share = remote exec + persistence |
+
+**Rule scope matters.** A `host`-scoped rule only fires when both findings touch a common machine — a genuine attack chain. A `domain`-scoped rule fires when both conditions merely exist somewhere in the domain; it is a weaker signal and every boosted finding is tagged `correlationScope=domain` so you can tell the two apart.
+
+Findings anchored on the domain (such as `LOCAL_ADMIN_OVERLAP`) carry the list of hosts they actually span, so they correlate against per-host findings on exactly those hosts.
 
 ---
 
@@ -409,6 +413,14 @@ ZeroTrustAuditor/
         └── SiemRenderer.cs     Splunk HEC, Sentinel, CEF output + MITRE mapping
 ```
 
+### Tests
+
+```powershell
+dotnet test tests\ZeroTrustAuditor.Tests\ZeroTrustAuditor.Tests.csproj
+```
+
+The suite covers aggregation (deduplication identity, severity selection, correlation scope) and report encoding. These are regression tests for defects that previously corrupted output silently — a finding-level bug produces a wrong report rather than a crash, so this is the only layer that catches them. CI runs the tests before the publish job.
+
 **Why pure C#?** The first version of this tool used a C# orchestrator that spawned PowerShell 5.1 child processes. This caused three categories of persistent failures: `CimCmdlets` incompatible with PS Core runspaces, UTF-8 encoding errors in PS 5.1, and parser bugs with long string lines. v2.0 replaces every PS call with a native .NET API — the same information, zero compatibility issues.
 
 ---
@@ -426,6 +438,19 @@ ZeroTrustAuditor/
 | Build error: CS0234 DirectoryServices | NuGet restore did not download the package | Run `dotnet restore` with internet access, then rebuild |
 
 ---
+
+## Known limitations
+
+Read these before treating a clean report as evidence of good segmentation. A full analysis and the planned redesign are in [REARCHITECTURE.md](REARCHITECTURE.md).
+
+| Limitation | What it means for your results |
+|---|---|
+| **Segment boundaries are inferred from the third IP octet** | `10.1.5.0/24` and `10.2.5.0/24` are treated as the *same* segment, so exposures between them are missed; a `/23` is treated as two segments, producing false positives. Subnet masks, VLANs, and routing are not consulted. IPv6-only hosts are never evaluated. |
+| **One vantage point** | Every probe originates from the machine running the exe. A result describes reachability *from that one segment* only — it is not a network-wide property, even though findings are presented per target host. |
+| **Closed and filtered are indistinguishable** | A TCP connect that fails is recorded the same way whether the firewall dropped it or the host is powered off. A "no findings" result therefore cannot distinguish a working control from a dead host. |
+| **No expected-policy baseline** | Every reachable admin port across a boundary is reported, including approved management paths. There is no allow-list, so triage is manual on every run. |
+| **Probing is unthrottled** | `maxParallelProbes` is not enforced. Large host lists can exhaust ephemeral ports, and the resulting timeouts are recorded as *closed* — i.e. the tool becomes more optimistic the harder you push it. Keep runs small until this is fixed. |
+| **Not an assumed-breach tool** | It requires a domain-joined workstation, a valid domain user, and the Remote Registry service on targets. That is a credentialed configuration audit, not an unauthenticated foothold simulation. |
 
 ## Legal notice
 

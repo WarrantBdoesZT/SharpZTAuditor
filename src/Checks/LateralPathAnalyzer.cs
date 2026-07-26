@@ -104,7 +104,8 @@ namespace ZeroTrustAuditor.Checks
                                 $"LocalGroup=Administrators; Member={name}; Type=Group",
                                 "Remove broad domain groups from local Administrators. " +
                                 "Use LAPS for local admin password management. " +
-                                "Use PAW model with dedicated per-tier admin accounts."));
+                                "Use PAW model with dedicated per-tier admin accounts.",
+                                subject: name));
                         }
                     }
                     catch { }
@@ -190,7 +191,8 @@ namespace ZeroTrustAuditor.Checks
                         "WinRM access for broad groups allows lateral movement via PowerShell remoting.",
                         $"RemoteManagementUsers member={grp}; Type=Group",
                         "Restrict Remote Management Users to named admin accounts. " +
-                        "Use JEA (Just Enough Administration) to constrain WinRM-accessible users."));
+                        "Use JEA (Just Enough Administration) to constrain WinRM-accessible users.",
+                        subject: grp));
                 }
             }
             catch (Exception ex)
@@ -203,16 +205,37 @@ namespace ZeroTrustAuditor.Checks
 
         private void CheckLaps(string host, List<Finding> findings)
         {
-            // Check for LAPS registry key (Windows LAPS or legacy LAPS)
-            var lapsKey = GetRemoteReg(host,
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\Config",
-                "BackupDirectory");
+            // Look in all three places LAPS can be configured. The policy keys matter:
+            // a GPO-managed Windows LAPS deployment writes under Policies\LAPS, so
+            // checking only the local-state key reports correctly-configured estates
+            // as non-compliant.
+            var probes = new[]
+            {
+                (Key: @"SOFTWARE\Microsoft\Windows\CurrentVersion\LAPS\Config", Value: "BackupDirectory"),
+                (Key: @"SOFTWARE\Microsoft\Policies\LAPS",                     Value: "BackupDirectory"),
+                (Key: @"SOFTWARE\Policies\Microsoft Services\AdmPwd",          Value: "AdmPwdEnabled"),
+            };
 
-            var legacyLapsKey = GetRemoteReg(host,
-                @"SOFTWARE\Policies\Microsoft Services\AdmPwd",
-                "AdmPwdEnabled");
+            var anyUnreadable = false;
 
-            if (lapsKey != null || legacyLapsKey != null) return;
+            foreach (var probe in probes)
+            {
+                var status = TryGetRemoteReg(host, probe.Key, probe.Value, out _);
+
+                // LAPS is configured somewhere -- nothing to report.
+                if (status == RegistryReadStatus.Read) return;
+                if (status == RegistryReadStatus.Unreadable) anyUnreadable = true;
+            }
+
+            // Every probe failed to READ rather than confirming absence. We cannot tell
+            // a host without LAPS from one we simply could not query, and reporting a
+            // High finding here fabricates one per unreachable host. The orchestrator
+            // already emits REMOTE_REGISTRY_UNREACHABLE explaining the gap.
+            if (anyUnreadable)
+            {
+                Log($"  {host} LAPS state undetermined (registry unreadable) -- not reporting.");
+                return;
+            }
 
             findings.Add(MakeFinding(host, "LAPS_NOT_DEPLOYED", Severity.High,
                 $"LAPS (Local Administrator Password Solution) does not appear to be deployed on '{host}'. " +
@@ -235,7 +258,13 @@ namespace ZeroTrustAuditor.Checks
             foreach (var kv in adminOverlap)
             {
                 var account = kv.Key;
-                var hosts   = kv.Value;
+
+                // Distinct: a host enumerated twice must not inflate the overlap count
+                // and push the finding into a higher severity band.
+                var hosts = kv.Value
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(h => h, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
 
                 if (hosts.Count < minHosts) continue;
 
@@ -251,7 +280,14 @@ namespace ZeroTrustAuditor.Checks
                     "Implement LAPS to ensure unique local admin passwords per host. " +
                     "Remove shared admin accounts. " +
                     "Use tiered administration: accounts used on tier-1 servers must not " +
-                    "have local admin on tier-2 workstations."));
+                    "have local admin on tier-2 workstations.",
+                    // Subject keeps one finding per account instead of collapsing every
+                    // overlapping account in the domain into a single row.
+                    subject: account,
+                    // AffectedHosts is what lets host-scoped correlation rules match this
+                    // domain-anchored finding against per-host findings such as
+                    // SMB_SIGNING_DISABLED on the very hosts the account spans.
+                    affectedHosts: hosts));
             }
         }
     }
