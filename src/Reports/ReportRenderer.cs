@@ -136,8 +136,8 @@ th.sortable::after{content:' \2195';opacity:.4;font-size:9px}
 </head>
 <body>
 <header>
-  <h1>ZeroTrustAuditor v2.0 -- Report</h1>
 """);
+            sb.AppendLine($"  <h1>{ToolInfo.Name} v{ToolInfo.ShortVersion} -- Report</h1>");
             sb.AppendLine($"  <p>Domain: {WebUtility.HtmlEncode(report.Domain)} &nbsp;|&nbsp;" +
                           $" Generated: {report.GeneratedAt:yyyy-MM-dd HH:mm} UTC &nbsp;|&nbsp;" +
                           $" Hosts: {report.TargetHosts.Length} &nbsp;|&nbsp;" +
@@ -191,8 +191,10 @@ th.sortable::after{content:' \2195';opacity:.4;font-size:9px}
             sb.Append("""
 </tbody></table>
 </div>
-<footer>ZeroTrustAuditor v2.0 -- read-only, non-destructive assessment</footer>
 """);
+            sb.AppendLine(
+                $"<footer>{ToolInfo.Name} v{ToolInfo.ShortVersion} -- read-only, " +
+                "non-destructive assessment</footer>");
             sb.Append(InteractiveScript);
             sb.Append("""
 </body></html>

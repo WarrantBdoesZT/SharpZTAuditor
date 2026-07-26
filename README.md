@@ -1,4 +1,4 @@
-# ZeroTrustAuditor v2.0
+# ZeroTrustAuditor v3.0
 
 > **Read-only internal network segmentation assessment, from an assumed-breach posture.**
 > Answers one question: *from where I stand, what can I reach that I should not be able to?*
